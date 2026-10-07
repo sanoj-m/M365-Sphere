@@ -58,5 +58,8 @@ if (!upn) { console.error('usage: node scripts/_dedupe-diff.js <upn>'); process.
     };
     showDiff('text', pa.text || '', pb.text || '');
     showDiff('html', pa.html || '', pb.html || '');
+    const stripWs = s => String(s || '').replace(/\s+/g, '');
+    console.log('html ws-stripped equal:', stripWs(pa.html) === stripWs(pb.html));
+    console.log('html ws-stripped hash:', sha(stripWs(pa.html)), sha(stripWs(pb.html)));
   }
 })().catch(e => { console.error(e.message); process.exit(1); });

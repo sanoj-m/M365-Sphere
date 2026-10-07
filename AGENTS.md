@@ -1,4 +1,4 @@
-# M365 PST Backup — Agent Guide
+# M365-Sphere — Agent Guide
 
 Read this first; it exists so you don't have to explore the codebase to be effective.
 Keep it updated when you change architecture, endpoints, or workflows.
@@ -39,7 +39,7 @@ served from `web-react/dist` on port 8080 (localhost only, token-authed).
   cannot reach) to PSTs via the Microsoft Graph eDiscovery (Premium) API —
   the replacement for the retired `New-ComplianceSearchAction -Export`.
   Per-chunk: `ediscoverySearch` (KQL `sent>=… AND sent<…`) under a shared case
-  (`M365 PST Backup Export`, id cached in `data/exo-case.json`) with the mailbox
+  (`M365-Sphere Export`, id cached in `data/exo-case.json`) with the mailbox
   attached via `searches/{id}/additionalSources` → `estimateStatistics` →
   direct search `exportResult` (exportFormat `pst`, `splitSource`) → stream
   `exportFileMetadata[].downloadUrl` to disk
@@ -184,7 +184,7 @@ served from `web-react/dist` on port 8080 (localhost only, token-authed).
 Runs as a detached `node server.js` process (no service). To restart:
 
 ```bash
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { \$_.CommandLine -like '*server.js*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }; Start-Sleep -Seconds 2; Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.js' -WorkingDirectory 'C:\Users\sanoj\Documents\m365-pst-backup' -WindowStyle Hidden"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { \$_.CommandLine -like '*server.js*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }; Start-Sleep -Seconds 2; Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.js' -WorkingDirectory 'C:\Users\sanoj\Documents\m365-sphere' -WindowStyle Hidden"
 ```
 
 Interrupting a backup is safe: folders persist incrementally, items resume

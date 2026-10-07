@@ -25,7 +25,7 @@
 ## Current state
 
 - Working tree: 22 changed files (3 untracked, 19 modified) — below the 50-file commit threshold, no commit made this run.
-- Last commit still `2df541d`; remote `origin` = https://github.com/sanoj-m/M365-Backup.git.
+- Last commit still `2df541d`; remote `origin` = https://github.com/sanoj-m/M365-Sphere.git.
 - Pending: user must restart the server (new `/api/sizes` route + DB migration) and click **Fetch Sizes** to populate the new columns.
 
 ## Next steps

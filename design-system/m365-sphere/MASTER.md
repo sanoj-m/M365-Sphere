@@ -6,7 +6,7 @@
 
 ---
 
-**Project:** M365 PST Backup
+**Project:** M365-Sphere
 **Generated:** 2026-09-29 09:45:02
 **Category:** Developer Tool / IDE
 **Design Dials:** Density 8/10 (Dense / Dashboard)

@@ -1,4 +1,4 @@
-# 📦 M365 PST Backup
+# 📦 M365-Sphere
 
 **Self-hosted Microsoft 365 mailbox backup** — a Node.js + React application that
 backs up primary mailboxes **and** online archives to local disk, verifies integrity,
@@ -300,11 +300,11 @@ File). Folder hierarchy preserved; no restore agent needed.
 
 ## 👨‍💻 Development
 
-- Repo: <https://github.com/sanoj-m/M365-Backup> (private, `main`). `config.json`,
+- Repo: <https://github.com/sanoj-m/M365-Sphere> (private, `main`). `config.json`,
   `data/`, `node_modules/`, `pst-import/` gitignored.
 - Session logs in `docs/sessions/`; the `saver` skill (`.kimi-code/skills/saver/`)
   writes the session log, refreshes docs, and commits when ≥50 files changed.
-- Design system: `design-system/m365-pst-backup/MASTER.md` (OLED dark palette,
+- Design system: `design-system/m365-sphere/MASTER.md` (OLED dark palette,
   Google Sans + JetBrains Mono) — read before touching styles.
 - Agent guide: `AGENTS.md` (architecture map, API quick reference, conventions) —
   kept current every session.

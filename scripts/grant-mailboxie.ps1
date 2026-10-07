@@ -2,7 +2,7 @@
 # Read/export ONLY - least privilege for backup; no import/write permission is
 # granted here (restore would need MailboxItem.ImportExport.All, deliberately
 # not requested). Grants three APPLICATION roles on Microsoft Graph for the
-# "M365 PST Backup" app:
+# "M365-Sphere" app:
 #   MailboxFolder.Read.All  - archive folder enumeration + delta
 #   MailboxItem.Read.All    - archive item enumeration + delta
 #   MailboxItem.Export.All  - read-only full-fidelity export (exportItems)

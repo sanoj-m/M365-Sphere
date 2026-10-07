@@ -17,7 +17,7 @@ const svcUser = process.env.M365_SVC_USER || cfg.svcUser;
 const svcPassword = process.env.M365_SVC_PASSWORD || cfg.svcPassword;
 
 const opts = {
-  name: 'M365 PST Backup',
+  name: 'M365-Sphere',
   description: 'Microsoft 365 mailbox backup service with web dashboard (localhost:8080)',
   script: path.join(__dirname, 'server.js'),
   workingDirectory: __dirname,

@@ -1,4 +1,4 @@
-// M365 PST Backup — local web server + dashboard
+// M365-Sphere — local web server + dashboard
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -1826,7 +1826,7 @@ const srv = app.listen(port, host, () => {
     fs.writeFileSync(path.join(cfg.dataDir, 'session-token'), sessionToken, { mode: 0o600 });
     console.log('Session token written to data/session-token (the dashboard fetches it via /session-token.js)');
   } catch (e) { console.error('could not write data/session-token:', e.message); }
-  console.log(`M365 PST Backup`);
+  console.log(`M365-Sphere`);
   console.log(`Dashboard -> http://${host}:${port}`);
   console.log(`Data dir  -> ${cfg.dataDir}`);
   console.log(`PST output-> ${cfg.pstDir}`);

@@ -1,6 +1,6 @@
-# M365-Backup Online Archive Diagnostic Report
+# M365-Sphere Online Archive Diagnostic Report
 
-_Read-only diagnostic investigation of the working tree at `c:\Users\sanoj\Documents\m365-pst-backup`._
+_Read-only diagnostic investigation of the working tree at `c:\Users\sanoj\Documents\m365-sphere`._
 _Nothing was modified during the investigation._
 
 ## 1. Executive Summary

@@ -13,7 +13,7 @@
 ## What was done
 
 - Deleted `.kimi-code/skills/design/`; installed ui-ux-pro-max via `npx ui-ux-pro-max-cli init --ai universal` into `.agents/skills/` (companion skills: design-system, brand, banner-design). Python 3.14 available for its search scripts.
-- Generated and persisted a design system at `design-system/m365-pst-backup/MASTER.md`: Dark Mode (OLED), bg `#0F172A`, cards `#1B2336`, accent green `#22C55E`, density 8.
+- Generated and persisted a design system at `design-system/m365-sphere/MASTER.md`: Dark Mode (OLED), bg `#0F172A`, cards `#1B2336`, accent green `#22C55E`, density 8.
 - Restyled `web-react` (components: Reveal, SetupPanel, MailboxTable, DetailPanel; shared `format.js`) and the `web/index.html` fallback to the dark system. Build passes (`npm run build:web`).
 - Typography switched to Google Sans (body/UI) + Google Sans Code (headings/mono/log viewer), verified loading from Google Fonts.
 - Mailbox table redesign: dense ~44px rows, inline action buttons under an "Actions" header, unified toolbar (search + selection + Backup Selected), sticky header, safe wrapping of long addresses.

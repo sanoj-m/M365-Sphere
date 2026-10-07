@@ -45,7 +45,7 @@ export default function ErrorReport({ status, logs, consoleErrors }) {
   const buildText = () => {
     const { at, jobs, badBoxes, warnErrLogs, consoleErrors: cerrs } = report;
     const L = [];
-    L.push('# M365 PST Backup — error report');
+    L.push('# M365-Sphere — error report');
     L.push('');
     L.push(`- Time: ${at}`);
     L.push(`- Tenant: ${(status && status.tenant) || 'unknown'}`);

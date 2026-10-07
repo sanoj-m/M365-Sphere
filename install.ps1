@@ -1,4 +1,4 @@
-# M365 PST Backup — one-click install (run as Administrator; install.bat self-elevates).
+# M365-Sphere — one-click install (run as Administrator; install.bat self-elevates).
 # Restores a checkpoint -> ensures Node.js -> installs deps -> builds the dashboard
 # -> writes config.json -> registers the Windows service.
 $ErrorActionPreference = 'Stop'
@@ -13,7 +13,7 @@ if (-not $isAdmin) { Write-Host 'Please run install.bat (it elevates automatical
 
 # --- restore point (best effort) ---
 Info 'creating system restore point (best effort)…'
-try { Checkpoint-Computer -Description 'M365 PST Backup install' -RestorePointType APPLICATION_INSTALL -ErrorAction Stop }
+try { Checkpoint-Computer -Description 'M365-Sphere install' -RestorePointType APPLICATION_INSTALL -ErrorAction Stop }
 catch { Write-Host "[install] restore point skipped: $($_.Exception.Message)" -ForegroundColor DarkYellow }
 
 # --- Node.js ---

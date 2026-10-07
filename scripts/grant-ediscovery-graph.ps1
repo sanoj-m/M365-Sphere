@@ -1,7 +1,7 @@
 # One-time grants for the Graph eDiscovery export (replaces the retired
 # New-ComplianceSearchAction -Export). Single admin sign-in does both:
 #  1. Application permission eDiscovery.ReadWrite.All on Microsoft Graph for
-#     the "M365 PST Backup" app (app-only case/search/export operations).
+#     the "M365-Sphere" app (app-only case/search/export operations).
 #  2. Delegated scope eDiscovery.Download.Read on the MicrosoftPurviewEDiscovery
 #     resource (b26e684c-...) with tenant-wide consent, so a delegated token
 #     can download export files without the interactive sign-in page.

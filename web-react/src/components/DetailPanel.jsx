@@ -185,7 +185,7 @@ export default function DetailPanel({ upn, onClose }) {
 
   const copyForAgent = () => {
     const lines = [];
-    lines.push(`Help me fix backup issues for mailbox ${d.upn} in the M365 PST Backup tool (repo: m365-pst-backup, Node.js backend in lib/, verify logic in lib/engine.js).`);
+    lines.push(`Help me fix backup issues for mailbox ${d.upn} in the M365-Sphere tool (repo: m365-sphere, Node.js backend in lib/, verify logic in lib/engine.js).`);
     lines.push('');
     if (report) {
       lines.push(`Verification (${report.at}): ${totals.missing === 0 ? 'PASSED' : `FAILED — ${totals.missing} items not backed up`} · integrity ${integrity.checked - integrity.failed}/${integrity.checked} samples OK`);

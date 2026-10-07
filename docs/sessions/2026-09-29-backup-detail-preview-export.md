@@ -37,7 +37,7 @@
 ## Current state
 
 - All features verified live against tenant "Contoso" (2516 mailboxes); build passes; server running the latest code and bundle.
-- Last commit: `2df541d` on `main` (GitHub `sanoj-m/M365-Backup`). This session's changes not yet committed: **22 files** changed (3 untracked, 19 modified) — below the 50-file threshold, so no commit/push this run.
+- Last commit: `2df541d` on `main` (GitHub `sanoj-m/M365-Sphere`). This session's changes not yet committed: **22 files** changed (3 untracked, 19 modified) — below the 50-file threshold, so no commit/push this run.
 - `config.json` currently has cleared credentials (disconnect was tested live) — reconnect via "Sign in with Microsoft" reuses the existing app registration.
 
 ## Next steps

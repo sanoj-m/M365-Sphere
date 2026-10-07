@@ -35,7 +35,7 @@
 
 - Server restarted and running with all backend changes; dashboard rebuilt (`web-react/dist`) — user just needs to reload the tab.
 - Working tree: 42 changed files (9 untracked, 33 modified) — below the 50-file commit threshold, no commit made this run.
-- Last commit still `3e0c8f0`; remote `origin` = https://github.com/sanoj-m/M365-Backup.git.
+- Last commit still `3e0c8f0`; remote `origin` = https://github.com/sanoj-m/M365-Sphere.git.
 
 ## Next steps
 

@@ -1,4 +1,4 @@
-# M365-Backup — Full Archive / AEA / Reliability Upgrade Plan
+# M365-Sphere — Full Archive / AEA / Reliability Upgrade Plan
 
 _Status: proposal only — no implementation yet. Awaits approval._
 _Research date: 2026-10-01. All capability claims cite Microsoft Learn / Microsoft devblogs._

@@ -1,4 +1,4 @@
-# One-time grant: add the "M365 PST Backup" app to an eDiscovery-capable role group.
+# One-time grant: add the "M365-Sphere" app to an eDiscovery-capable role group.
 # Requires an admin sign-in (interactive MFA). Safe to re-run.
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $PSScriptRoot 'grant-ediscovery.log'
@@ -26,13 +26,13 @@ try {
   if (-not $group) { throw "No eDiscovery-capable role group found in this tenant. Groups seen: $(($all.Name) -join ' | ')" }
   "Using role group: $($group.Name)" | Out-File $log -Append
 
-  $appObjId = 'YOUR-ENTERPRISE-APP-OBJECT-ID' # enterprise application object id of 'M365 PST Backup'
+  $appObjId = 'YOUR-ENTERPRISE-APP-OBJECT-ID' # enterprise application object id of 'M365-Sphere'
   $appId = 'YOUR-APP-CLIENT-ID'     # application (client) id
 
   # Register the service principal in Exchange/Purview (one-time, idempotent).
   $sp = Get-ServicePrincipal -Identity $appObjId -ErrorAction SilentlyContinue
   if (-not $sp) {
-    New-ServicePrincipal -AppId $appId -ObjectId $appObjId -DisplayName 'M365 PST Backup'
+    New-ServicePrincipal -AppId $appId -ObjectId $appObjId -DisplayName 'M365-Sphere'
     "Registered service principal in Exchange/Purview." | Out-File $log -Append
   } else {
     "Service principal already registered." | Out-File $log -Append

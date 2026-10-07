@@ -3,7 +3,7 @@ const Service = require('node-windows').Service;
 const path = require('path');
 
 const svc = new Service({
-  name: 'M365 PST Backup',
+  name: 'M365-Sphere',
   script: path.join(__dirname, 'server.js'),
   workingDirectory: __dirname
 });

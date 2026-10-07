@@ -12,7 +12,7 @@
 
 ## What was done
 
-- **Automated setup** (`lib/setup.js`, new): device-code sign-in (Microsoft Graph PowerShell first-party client `14d82eec-…` — the Azure PowerShell client is blocked for these scopes, AADSTS65002). Creates the "M365 PST Backup" app registration, grants admin consent (roles resolved **by name** from resource SPs after a GUID mismatch error), creates a client secret, writes `config.json` live (no restart), then best-effort Exchange `ApplicationImpersonation` via PowerShell — auto-installs ExchangeOnlineManagement (TLS 1.2 + NuGet fix for PS 5.1) and surfaces the second device code in the dashboard. Routes: `POST /api/setup/login`, `GET /api/setup/status`, `POST /api/setup/archive`.
+- **Automated setup** (`lib/setup.js`, new): device-code sign-in (Microsoft Graph PowerShell first-party client `14d82eec-…` — the Azure PowerShell client is blocked for these scopes, AADSTS65002). Creates the "M365-Sphere" app registration, grants admin consent (roles resolved **by name** from resource SPs after a GUID mismatch error), creates a client secret, writes `config.json` live (no restart), then best-effort Exchange `ApplicationImpersonation` via PowerShell — auto-installs ExchangeOnlineManagement (TLS 1.2 + NuGet fix for PS 5.1) and surfaces the second device code in the dashboard. Routes: `POST /api/setup/login`, `GET /api/setup/status`, `POST /api/setup/archive`.
 - **Persistent connection state**: `tenantName` + `archiveGranted` saved to `config.json`; `/api/setup/status` reports "Connected to tenant …" from config after restarts; header shows `● Connected — Contoso`.
 - **Graph fixes** (`lib/graph.js`): removed unsupported `userPrincipalName ne null` filter; removed unsupported `parentFolderId eq null` filter; fixed double-`?` URL in folder tree; removed invalid `size` from message `$select`; error messages now show the Graph body first (URL truncation was hiding real errors); **removed `$top=200` from messages/delta — Graph returns a premature deltaLink after exactly one page when `$top` is set (verified live: 200 vs 2,277 items)**.
 - **Engine fixes** (`lib/engine.js`): incremental delta syncs no longer delete untouched local rows/files (was wiping mailboxes); previously-failed items are re-queued every sync (`store.pendingItems`); null message-meta guarded; "archive folder not found" = mailbox has no archive → skip cleanly, not a failure; mailbox status now requires per-folder stored counts to match live counts before `done`; byte totals recomputed after every batch (live "Backed up" column).
@@ -33,7 +33,7 @@
 - Server running, connected to tenant "Contoso" (`645f8ebe-…`), archive impersonation granted.
 - `it@example.com`: full re-sync running after delta-token purge; 7,771+ items stored; auto-resume keeps it driving to 31,272.
 - Working tree: 48 changed files (25 untracked, 23 modified) — **below the 50-file commit threshold, no commit made** (2 more changes until threshold).
-- Last commit `2df541d`; remote `origin` = https://github.com/sanoj-m/M365-Backup.git.
+- Last commit `2df541d`; remote `origin` = https://github.com/sanoj-m/M365-Sphere.git.
 - `config.json`, `data/`, `node_modules/`, `pst-export/` confirmed gitignored.
 
 ## Next steps

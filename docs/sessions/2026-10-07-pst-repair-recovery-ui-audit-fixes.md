@@ -94,7 +94,7 @@ codebase audit whose P0/P1 findings were fixed the same week.
 - user1: 123,153 pst-import-rebuilt items; ~90k FTS items remain (mostly not
   in any PST or folders pending backup); archive backup job done.
 - Server running with all fixes; recovery job detached; panel live.
-- Branch `feature/archive-upgrade`; remote github.com/sanoj-m/M365-Backup.
+- Branch `feature/archive-upgrade`; remote github.com/sanoj-m/M365-Sphere.
 
 ## Next steps
 

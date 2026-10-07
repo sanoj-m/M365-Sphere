@@ -24,7 +24,7 @@
 
 - 42 changed files (9 untracked + 33 modified) — below the 50 threshold, no commit made.
 - Backend changes need a service restart to take effect.
-- HEAD remains 3e0c8f0; remote: https://github.com/sanoj-m/M365-Backup.git
+- HEAD remains 3e0c8f0; remote: https://github.com/sanoj-m/M365-Sphere.git
 
 ## Next steps
 

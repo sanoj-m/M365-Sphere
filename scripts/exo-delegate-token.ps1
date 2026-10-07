@@ -2,7 +2,7 @@
 # code is visible immediately. Sign in at https://login.microsoft.com/device
 # within 15 minutes of this window appearing.
 $env:Path = "C:\Program Files\nodejs;$env:Path"
-Set-Location 'C:\Users\sanoj\Documents\m365-pst-backup'
+Set-Location 'C:\Users\sanoj\Documents\m365-sphere'
 node scripts\exo-delegate-token.js
 Write-Host ''
 Write-Host '----------------------------------------'

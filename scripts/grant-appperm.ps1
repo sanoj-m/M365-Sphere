@@ -1,5 +1,5 @@
 # One-time: grant tenant-wide admin consent for the Exchange.ManageAsApp
-# application permission on the "M365 PST Backup" app (via Microsoft Graph).
+# application permission on the "M365-Sphere" app (via Microsoft Graph).
 # Requires a Global/Cloud admin sign-in (interactive consent prompt).
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $PSScriptRoot 'grant-appperm.log'
