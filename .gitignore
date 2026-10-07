@@ -1,0 +1,9 @@
+node_modules/
+data/
+config.json
+*.log
+pst-export/
+pst-import/
+daemon/
+tools/
+scripts/*.out

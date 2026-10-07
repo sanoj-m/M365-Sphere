@@ -1,0 +1,26 @@
+{
+  "name": "m365-pst-backup",
+  "version": "1.0.0",
+  "description": "Local Microsoft 365 mailbox backup (primary + online archive) with verification and PST export",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build:web": "npm --prefix web-react install && npm --prefix web-react run build",
+    "dev:web": "npm --prefix web-react run dev",
+    "install-service": "node install-service.js",
+    "uninstall-service": "node uninstall-service.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^5.11.2",
+    "mailparser": "^3.9.31",
+    "node-windows": "^1.0.0-beta.8",
+    "pst-extractor": "^1.12.0"
+  }
+}
