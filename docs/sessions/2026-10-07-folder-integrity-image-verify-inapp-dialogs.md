@@ -31,7 +31,7 @@ root-vs-folder destination choices on all copy actions.
   paths into the unique IE twin of the same (top-level group, name); collision
   handling keeps the **better copy** (eml > fts > larger) and retires the loser
   to `data/store/_graveyard/<upn>/` — never deleted. Ran fleet-wide:
-  karsten.v archive: 2,586 items re-homed, later +620 (25 IT parent), +16/+38
+  user1 archive: 2,586 items re-homed, later +620 (25 IT parent), +16/+38
   targeted merges (MotF, 1070-Namaste).
 - **25 IT is a REAL mailbox folder** (aux partition, thousands of items) — kept,
   not deleted (user informed); only the stale EWS rows inside it were folded.
@@ -79,7 +79,7 @@ root-vs-folder destination choices on all copy actions.
 
 - Public repo `sanoj-m/M365-Sphere` @ this commit; server running all fixes;
   recovery run + image verification complete/continuing.
-- karsten.v archive: clean tree, PST-wins recovery active, report available in UI.
+- user1 archive: clean tree, PST-wins recovery active, report available in UI.
 
 ## Next steps
 
