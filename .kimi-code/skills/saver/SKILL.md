@@ -34,6 +34,24 @@ Read previous logs in `docs/sessions/` first so the new entry stays consistent i
 - Always include the new/updated session log and doc updates in the commit.
 - Never commit `config.json`, `data/`, or `node_modules/` — they are gitignored; verify the actual file list (not just status lines) before committing.
 
+### Public-repo + local-data rules (M365-Sphere)
+
+- `origin` is the **PUBLIC** repo `github.com/sanoj-m/M365-Sphere` — every push is
+  world-visible. Before committing, re-verify:
+  - `git diff --cached --name-only` contains nothing under `data/`, `pst-import/`,
+    `pst-export/`, `config.json`, `node_modules/` (all gitignored — confirm).
+  - Grep staged files for tenant identifiers (real domains, UPNs, person names,
+    app-registration GUIDs) — write session logs with placeholders
+    (`user1`, `example.com`) from the start.
+- **Local environment data stays local**: backups (`data/`), credentials
+  (`config.json`, tokens), imported PSTs (`pst-import/`) and the pre-public git
+  history backup (`../m365-git-backup-prepublic`) are never committed or pushed.
+  They are required for the app to keep working — do not delete or "clean" them.
+- The full pre-public history lives ONLY outside the repo
+  (`../m365-git-backup-prepublic`); the old private repo
+  `github.com/sanoj-m/M365-Backup` is not a remote of this repo anymore — push
+  to `origin` (public) only, unless the user says otherwise.
+
 ## 4. Report
 
 Tell the user: the session log path, what docs were updated, and whether a commit/push happened (with commit hash) or how many changes remain until the 50-change threshold.

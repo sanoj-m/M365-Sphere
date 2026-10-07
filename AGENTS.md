@@ -400,9 +400,12 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   same mailbox). `/api/status` exposes `dedupeChecks` (array of live check
   progress, upn-keyed Map) + `dedupeRuns`; `/api/stop/dedupe` takes `{upn?}`.
   Local = SHA-256 groups → `_duplicates/<path>/` + manifest + `status='deduped'`;
-  live = Message-ID candidate groups, then MIME SHA-256 verification (only
-  byte-identical copies move; any mismatch/fetch error stays) → moved to
-  `Deleted Items/Dedupe <date>/<original folder path>` (structure kept, folder
+  live = Message-ID candidate groups, then `mimeFingerprint()` verification
+  (mailparser: identity headers + whitespace-stripped html/text + decoded
+  attachment hashes — raw-byte SHA-256 never matches because Exchange rewrites
+  transport headers/multipart boundaries per copy and signature relays rewrite
+  the text part; only fingerprint-identical copies move, any error stays) →
+  moved to `Deleted Items/Dedupe <date>/<original folder path>` (structure kept, folder
   ids cached per run; `graph.ensureChildFolder` from `deleteditems`). Live scans
   exclude the Deleted Items AND Junk Email subtrees (`_liveFolders`, well-known
   ids) so re-runs resume after a stop and junk is exempt. `jobs.upn` column
