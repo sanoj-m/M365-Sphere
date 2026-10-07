@@ -188,8 +188,14 @@ React 18 + Vite SPA. Highlights:
   Message-ID/sha256 + fuzzy subject/date/size dedupe), live progress card with
   stats + Stop, one-slot undo, persistent transfer history (History modal),
   on-demand live folder tree (progress bar, saved to `data/live-folders/`).
-- **Dedupe page** (`/?dedupe`): local (SHA-256 + fuzzy) and live (Message-ID)
-  dedupe with restore.
+- **Dedupe page** (`/?dedupe`): multiple concurrent per-mailbox sessions (column
+  grid), local (SHA-256 + fuzzy) and live (Message-ID candidates verified by
+  mailparser content fingerprint — identity headers + whitespace-stripped
+  html/text + decoded attachment hashes) dedupe. Verified live duplicates move
+  immediately per group to `Deleted Items/Dedupe <date>/<original path>`;
+  Deleted Items/Junk subtrees are excluded so runs resume after a stop.
+  Per-mailbox run history (Restart failed/stopped, Verify again), live check
+  progress, persistent log tail, restore for local runs.
 - **Running tasks panel**: live card per parallel job (backup, verify, PST, sizes,
   EXO, scan, fix-gaps) with progress and Stop.
 - Dark/light theme, Asia/Dubai timestamps, browser-local caching for instant loads,

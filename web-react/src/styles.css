@@ -1802,3 +1802,5 @@ body.compare-mode #root { padding: 0; }
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 .info-tip:hover .info-pop, .info-tip:focus-within .info-pop { display: block; }
+
+.dedupe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 18px; padding: 0 18px 18px; align-items: start; }

@@ -75,7 +75,7 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
   };
 
   return (
-    <div className="settings-card" style={{ margin: '0 18px 18px' }}>
+    <div className="settings-card" style={{ margin: 0 }}>
       <div className="settings-head">
         <h3 className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{upn}</h3>
         <button className="log-iconbtn" title="Remove this session (running jobs are not stopped)" aria-label={`Remove session ${upn}`} onClick={onRemove}>
@@ -340,9 +340,11 @@ export default function DedupePage() {
       {sessions.length === 0 ? (
         <p className="muted" style={{ padding: '0 18px' }}>Add one or more mailboxes above — each gets its own dedupe session that can run independently.</p>
       ) : (
-        sessions.map(upn => (
-          <DedupeSession key={upn} upn={upn} checks={checks} jobs={jobs} onRemove={() => removeSession(upn)} />
-        ))
+        <div className="dedupe-grid">
+          {sessions.map(upn => (
+            <DedupeSession key={upn} upn={upn} checks={checks} jobs={jobs} onRemove={() => removeSession(upn)} />
+          ))}
+        </div>
       )}
     </div>
   );
