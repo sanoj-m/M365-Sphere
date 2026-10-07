@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api, del } from '../api.js';
+import { dialog } from '../dialog.jsx';
 import { fmtBytes } from '../format.js';
 import { useModal } from './useModal.js';
 import { ChevronRight, Mail, Archive, FileBox, Trash2, FolderOpen, FolderCog, Database, HardDrive, X } from 'lucide-react';
@@ -63,7 +64,7 @@ function FolderManager({ upn, onChanged }) {
   const removeSelected = async () => {
     const chosen = folders.filter(f => sel.has(f.folderId));
     if (!chosen.length) return;
-    if (!window.confirm(`Delete ${chosen.length} selected folder(s) from the local backup of ${upn}? Locally stored emails and database records for these folders (and their subfolders) will be removed. The mailbox on the server is not touched. This cannot be undone.`)) return;
+    if (!await dialog.confirm({ title: 'Delete folders', danger: true, okText: 'Delete', message: `Delete ${chosen.length} selected folder(s) from the local backup of ${upn}? Locally stored emails and database records for these folders (and their subfolders) will be removed. The mailbox on the server is not touched. This cannot be undone.` })) return;
     setBusy(true);
     const failed = [];
     for (const f of chosen) {
@@ -123,8 +124,8 @@ function MailboxStorage({ m, onChanged, onBrowse }) {
   const hasBackup = (m.primaryBytes || 0) + (m.archiveBytes || 0) > 0;
   const total = (m.primaryBytes || 0) + (m.archiveBytes || 0);
 
-  const run = (confirmText, fn) => {
-    if (!window.confirm(confirmText)) return;
+  const run = async (confirmText, fn) => {
+    if (!await dialog.confirm({ title: 'Please confirm', danger: true, okText: 'Delete', message: confirmText })) return;
     setBusy(true);
     setErr(null);
     fn().then(() => onChanged()).catch(e => setErr(e.message)).finally(() => setBusy(false));

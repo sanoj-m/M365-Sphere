@@ -43,6 +43,18 @@ const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 cfg.dataDir = path.resolve(__dirname, cfg.dataDir || './data');
 cfg.pstDir = path.resolve(__dirname, cfg.pstDir || './pst-export');
 
+// The server runs detached with no console — capture fatal errors to a log so
+// mid-job crashes (which the dashboard only sees as "Failed to fetch") are
+// diagnosable after the fact.
+const crashLog = path.join(cfg.dataDir, 'server-crash.log');
+const logCrash = (kind, err) => {
+  try {
+    fs.appendFileSync(crashLog, `\n=== ${new Date().toISOString()} ${kind} ===\n${(err && err.stack) || err}\n`);
+  } catch { }
+};
+process.on('uncaughtException', err => { logCrash('uncaughtException', err); console.error(err); process.exit(1); });
+process.on('unhandledRejection', err => { logCrash('unhandledRejection', err); console.error('unhandledRejection:', err); });
+
 const store = new Store(cfg.dataDir);
 // Startup reconciliation: jobs left 'running' by a crash become 'interrupted';
 // prune old events/jobs at startup and then daily.
@@ -171,6 +183,14 @@ app.get('/api/mailbox/:upn/folders', wrap(async req => {
   // folders enumerated twice (scan rows vs IE rows).
   if (folders.some(f => f.scope === 'archive' && f.folderId.startsWith('ie-'))) {
     folders = folders.filter(f => f.scope !== 'archive' || f.folderId.startsWith('ie-') || f.folderId.startsWith('exo') || f.backedUp > 0);
+    // Keep the ancestor chain of every content-holding EWS folder: dropping
+    // backedUp=0 EWS parents would mount the child at the tree root.
+    const keep = new Set(folders.map(f => f.folderId));
+    const byIdAll = new Map(store.folderStats(m.upn).map(f => [f.folderId, f]));
+    for (const f of [...folders]) {
+      let p = f.parentId && byIdAll.get(f.parentId);
+      while (p && !keep.has(p.folderId)) { keep.add(p.folderId); folders.push(p); p = p.parentId && byIdAll.get(p.parentId); }
+    }
   }
   return { upn: m.upn, status: m.status, pstStatus: m.pstStatus, folders, live: engine.live[m.upn] || null, scanLive: scanLive[m.upn] || null };
 }));
@@ -222,6 +242,33 @@ app.get('/api/mailbox/:upn/pst-repair', wrap(async req => {
   const totals = log.reduce((a, r) => ({ replaced: a.replaced + r.replaced, skipped: a.skipped + r.skipped, unmatched: a.unmatched + r.unmatched, failed: a.failed + r.failed, verifyFailures: a.verifyFailures + (r.verifyFailures || 0) }),
     { replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0 });
   return { upn: m.upn, psts, totals, rebuiltItems: rebuilt.c, rebuiltBytes: rebuilt.bytes, remainingFts: remaining.c, lastRun: log.length ? log[log.length - 1].finishedAt : null, ...pstRepairState.status() };
+}));
+
+// Per-folder rebuild report: aggregates folderStats from the latest record of
+// each PST file (records from before per-folder tracking contribute nothing).
+app.get('/api/mailbox/:upn/pst-repair/report', wrap(async req => {
+  const m = store.getMailbox(req.params.upn);
+  if (!m) throw new Error('Mailbox not found');
+  let log = [];
+  try { log = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'pst-import-log.json'), 'utf8')); } catch { }
+  const latestByFile = new Map();
+  for (const r of log) latestByFile.set(r.file, r);
+  const byFolder = new Map();
+  let withStats = 0, lastRunAt = null;
+  for (const r of latestByFile.values()) {
+    if (!Array.isArray(r.folderStats)) continue;
+    withStats++;
+    if (!lastRunAt || r.finishedAt > lastRunAt) lastRunAt = r.finishedAt;
+    for (const fs of r.folderStats) {
+      const cur = byFolder.get(fs.path) || { path: fs.path, replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0 };
+      for (const k of ['replaced', 'skipped', 'unmatched', 'failed', 'verifyFailures']) cur[k] += fs[k] || 0;
+      byFolder.set(fs.path, cur);
+    }
+  }
+  const folders = [...byFolder.values()].sort((a, b) => b.replaced - a.replaced);
+  let imageVerify = null;
+  try { imageVerify = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'image-verify-report.json'), 'utf8')); } catch { }
+  return { upn: m.upn, folders, filesWithStats: withStats, lastRunAt, imageVerify: imageVerify ? { at: imageVerify.at, checked: imageVerify.checked, bad: imageVerify.bad, missingFiles: imageVerify.missingFiles, folders: imageVerify.folders.slice(0, 100), badItems: imageVerify.badItems.slice(0, 200) } : null };
 }));
 
 // Run the PST recovery (scripts/pst-repair.js) as a DETACHED background job:
@@ -1567,7 +1614,7 @@ app.post('/api/dedupe/check', wrap(async req => {
 }));
 app.post('/api/dedupe/apply', wrap(req => {
   if (pst.running || copyEngine.running) { const e = new Error('another job is running — stop it first'); e.status = 409; throw e; }
-  const { upn, target } = req.body || {};
+  const { upn, target, resume } = req.body || {};
   if (!isValidUpn(upn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
   if (!store.getMailbox(upn)) { const e = new Error('Mailbox not found'); e.status = 404; throw e; }
   if (dedupeEngine.isRunning(upn)) { const e = new Error('this mailbox already has a dedupe job running'); e.status = 409; throw e; }
@@ -1576,7 +1623,7 @@ app.post('/api/dedupe/apply', wrap(req => {
   if (target !== 'live' && engine.running && engine.jobUpns.includes(upn)) {
     const e = new Error('this mailbox is syncing right now — dedupe it after the backup finishes or stop the backup first'); e.status = 409; throw e;
   }
-  return target === 'live' ? dedupeEngine.applyLive(upn) : dedupeEngine.applyLocal(upn);
+  return target === 'live' ? dedupeEngine.applyLive(upn, { resume: !!resume }) : dedupeEngine.applyLocal(upn);
 }));
 app.post('/api/dedupe/restore', wrap(async req => {
   const { upn } = req.body || {};
@@ -1831,6 +1878,9 @@ const srv = app.listen(port, host, () => {
   console.log(`Data dir  -> ${cfg.dataDir}`);
   console.log(`PST output-> ${cfg.pstDir}`);
 });
+// Compare transfers / PST exports answer synchronously and can run far past
+// Node's default 300 s requestTimeout — disable it so the socket isn't killed mid-run.
+srv.requestTimeout = 0;
 srv.on('error', e => {
   if (e.code === 'EADDRINUSE') {
     console.error(`Port ${port} is already in use.`);

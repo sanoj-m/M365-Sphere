@@ -17,9 +17,9 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
   const [logs, setLogs] = useState([]);
   const [err, setErr] = useState(null);
 
-  const job = jobs.find(j => j.kind === 'dedupe' && j.status === 'running' && j.upn === upn) || null;
+  const job = jobs.find(j => (j.kind === 'dedupe' || j.kind === 'dedupe-live') && j.status === 'running' && j.upn === upn) || null;
   const checkProg = checks.find(c => c.upn === upn) || null;
-  const history = jobs.filter(j => (j.kind === 'dedupe' || j.kind === 'dedupe-check') && j.upn === upn).slice(0, 10);
+  const history = jobs.filter(j => (j.kind === 'dedupe' || j.kind === 'dedupe-live' || j.kind === 'dedupe-check') && j.upn === upn).slice(0, 10);
 
   useEffect(() => {
     try { localStorage.setItem(`dedupe.target.${upn}`, target); } catch { }
@@ -55,9 +55,9 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
       .finally(() => setChecking(false));
   };
 
-  const apply = () => {
+  const apply = (resume = false) => {
     setApplying(true); setErr(null);
-    post('/api/dedupe/apply', { upn, target })
+    post('/api/dedupe/apply', { upn, target, resume })
       .catch(e => setErr(e.message))
       .finally(() => setApplying(false));
   };
@@ -166,7 +166,7 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
                 ? 'Duplicates move to _duplicates/ with their folder structure kept, plus a restore manifest. Nothing is deleted.'
                 : 'Duplicates move to the mailbox\'s Deleted Items folder — recoverable on the server until retention expires.'}
             </p>
-            <button className="btn danger" disabled={applying} onClick={apply}>{applying ? 'Starting…' : 'Move duplicates aside'}</button>
+            <button className="btn danger" disabled={applying} onClick={() => apply()}>{applying ? 'Starting…' : 'Move duplicates aside'}</button>
           </div>
         </section>
       )}
@@ -192,13 +192,13 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
               <div key={j.id} className="copy-folder dedupe-group">
                 <span className="copy-folder-path">
                   <span className="muted">{fmtTime(j.startedAt)}</span>{' '}
-                  <b>{j.kind === 'dedupe-check' ? 'Check' : 'Dedupe'}</b>{' '}
+                  <b>{j.kind === 'dedupe-check' ? 'Check' : j.kind === 'dedupe-live' ? 'Move duplicates aside' : 'Dedupe'}</b>{' '}
                   <span className={j.status === 'done' ? 'good-text' : j.status === 'running' ? 'muted' : 'bad-text'}>{j.status}</span>
                   {j.total ? <span className="muted"> · {j.done || 0}/{j.total}</span> : ''}
                   {j.detail ? <span className="dedupe-loc">{j.detail}</span> : ''}
                 </span>
                 <span style={{ flex: '0 0 auto', display: 'flex', gap: 6 }}>
-                  {j.status === 'running' && j.kind === 'dedupe' && (
+                  {j.status === 'running' && (j.kind === 'dedupe' || j.kind === 'dedupe-live') && (
                     <button className="btn small danger" onClick={stop}>Stop</button>
                   )}
                   {j.status === 'running' && j.kind === 'dedupe-check' && (
@@ -206,9 +206,9 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
                   )}
                   {(j.status === 'stopped' || j.status === 'error' || j.status === 'interrupted') && (
                     <button className="btn small" disabled={applying || checking || !!job}
-                      title={j.kind === 'dedupe-check' ? 'Re-run this check' : 'Restart — already-moved items are skipped'}
-                      onClick={j.kind === 'dedupe-check' ? check : apply}>
-                      {j.kind === 'dedupe-check' ? 'Re-check' : 'Restart'}
+                      title={j.kind === 'dedupe-check' ? 'Re-run this check' : j.kind === 'dedupe-live' ? 'Resume — pending moves continue, already-verified items are not re-checked' : 'Restart — already-moved items are skipped'}
+                      onClick={j.kind === 'dedupe-check' ? check : () => apply(j.kind === 'dedupe-live')}>
+                      {j.kind === 'dedupe-check' ? 'Re-check' : j.kind === 'dedupe-live' ? 'Resume' : 'Restart'}
                     </button>
                   )}
                   {j.status === 'done' && (

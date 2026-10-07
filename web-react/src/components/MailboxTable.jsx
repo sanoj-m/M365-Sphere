@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { fmtBytes, fmtDate } from '../format.js';
 import { Search, User, Users, Globe, Check, Wrench } from 'lucide-react';
 import { post } from '../api.js';
+import { dialog } from '../dialog.jsx';
 
 const chipClass = s => ({ done: 'done', partial: 'partial', error: 'error', pending: 'pending', syncing: 'syncing' }[s] || 'none');
 const covDotClass = s => s === 'COMPLETE_VERIFIED' ? 'cov-green'
@@ -115,7 +116,7 @@ export default function MailboxTable({ mailboxes, busy, sizesBusy, scanBusy, pst
   // queues behind whatever the engine is doing — no client-side waiting.
   const fixGaps = async upn => {
     try { await post('/api/fix-gaps', { upn }); }
-    catch (e) { window.alert(`Fix gaps failed for ${upn}: ${e.message}`); }
+    catch (e) { dialog.notify(`Fix gaps failed for ${upn}: ${e.message}`, 'error'); }
   };
 
   const statusRank = s => ({ syncing: 0, partial: 1, error: 2, 'failed-final': 3, skipped: 4, done: 5 }[s] ?? 6);

@@ -79,3 +79,20 @@ rounds of verification fixes driven by live diffs.
 
 - Optional: a "move anyway" review list for the ~10% skipped non-identical
   candidates (currently kept forever by the safe default).
+
+---
+
+## Addendum (same day, second saver run)
+
+- Git identity neutralized for the public repo: repo-local
+  `user.name sanoj-m` / `user.email sanoj-m@users.noreply.github.com`; the
+  dedupe commit was amended (`264c603` → `d96f3e0`) and force-pushed so no
+  real-domain email shows in the latest commit.
+- Committed the parallel session's work that had accumulated in the working
+  tree: `web-react/src/dialog.jsx` (in-app confirm/choose/toast replacing
+  window.confirm/alert everywhere), `scripts/verify-images.js` (read-only
+  embedded-image verifier: attachment end-markers + cid resolution, report to
+  `data/image-verify-report.json`), and follow-on edits across
+  `server.js`, `lib/dedupe.js`, `lib/store.js`, `scripts/pst-repair.js`, and
+  most `web-react/src/components/*` (dialog adoption + compare-page updates).
+  `node --check` passed on all touched backend files; server healthy (200).

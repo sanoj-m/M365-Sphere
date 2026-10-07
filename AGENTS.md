@@ -410,7 +410,17 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   exclude the Deleted Items AND Junk Email subtrees (`_liveFolders`, well-known
   ids) so re-runs resume after a stop and junk is exempt. `jobs.upn` column
   (migration in store.js; `createJob(kind, total, upn)`) attributes runs to a
-  mailbox; checks run as `dedupe-check` job rows, applies as `dedupe` rows.
+  mailbox; checks run as `dedupe-check` job rows, local applies as `dedupe`
+  rows, live applies as `dedupe-live` rows (own task type in History — label
+  "Move duplicates aside"). Live apply is resumable: every verified outcome is
+  persisted per item in the `dedupe_live_plan` table (upn+liveId → dstPath,
+  status pending|moved|failed|kept; helpers `dedupeLivePlanAll`,
+  `upsertDedupeLiveItem`, `markDedupeLiveItem`, `clearDedupeLivePlan`). A fresh
+  apply clears the plan; `POST /api/dedupe/apply {upn, target:'live',
+  resume:true}` (the History "Resume" button on stopped/error/interrupted
+  `dedupe-live` rows) moves leftover pending items WITHOUT re-fingerprinting
+  and skips kept/moved/failed items entirely — an interrupted run never redoes
+  the verify phase. Move-404 counts as moved (an earlier run already moved it).
   The Dedupe page keeps the mailbox log tail visible after stop/finish and has
   a History section (per-mailbox check/dedupe runs with status + detail;
   Restart on stopped/error rows resumes, Verify again on done rows re-checks).

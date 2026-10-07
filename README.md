@@ -193,7 +193,11 @@ React 18 + Vite SPA. Highlights:
   mailparser content fingerprint — identity headers + whitespace-stripped
   html/text + decoded attachment hashes) dedupe. Verified live duplicates move
   immediately per group to `Deleted Items/Dedupe <date>/<original path>`;
-  Deleted Items/Junk subtrees are excluded so runs resume after a stop.
+  Deleted Items/Junk subtrees are excluded so runs resume after a stop. Live
+  apply is its own job kind (`dedupe-live`) with a persisted per-item plan
+  (`dedupe_live_plan` table) — the History "Resume" button on an
+  interrupted/stopped run moves leftover verified items without re-scanning or
+  re-verifying already-processed ones.
   Per-mailbox run history (Restart failed/stopped, Verify again), live check
   progress, persistent log tail, restore for local runs.
 - **Running tasks panel**: live card per parallel job (backup, verify, PST, sizes,

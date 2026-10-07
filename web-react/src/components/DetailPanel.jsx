@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createTreeCollection } from '@ark-ui/react/tree-view';
 import { api, del } from '../api.js';
+import { dialog } from '../dialog.jsx';
 import { fmtDateTime } from '../format.js';
 import { cacheGet, cacheSet } from '../cache.js';
 import { useLive } from '../live.jsx';
@@ -143,12 +144,12 @@ export default function DetailPanel({ upn, onClose }) {
     return () => { aliveRef.current = false; clearInterval(t); clearTimeout(timer); unsub(); };
   }, [upn, load, live]);
 
-  const clearEvents = () => {
-    if (!window.confirm(`Delete all stored events for ${upn}? This cannot be undone.`)) return;
+  const clearEvents = async () => {
+    if (!await dialog.confirm({ title: 'Clear events', danger: true, okText: 'Delete', message: `Delete all stored events for ${upn}? This cannot be undone.` })) return;
     setClearing(true);
     del('/api/mailbox/' + encodeURIComponent(upn) + '/events')
       .then(load)
-      .catch(e => alert('Clear events failed: ' + e.message))
+      .catch(e => dialog.notify('Clear events failed: ' + e.message, 'error'))
       .finally(() => setClearing(false));
   };
 

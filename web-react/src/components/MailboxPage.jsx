@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, del, post } from '../api.js';
+import { dialog } from '../dialog.jsx';
 import { fmtTime, fmtBytes, fmtDateTime } from '../format.js';
 import { ScopePanel } from './browse.jsx';
 import CopyWizard from './CopyWizard.jsx';
@@ -195,7 +196,7 @@ export default function MailboxPage({ upn }) {
                 <span className="log-count" role="status" aria-atomic="true">{events.length} {events.length === 1 ? 'entry' : 'entries'}</span>
                 <button className="log-iconbtn danger" title={`Clear activity log for ${upn}`} aria-label={`Clear activity log for ${upn}`}
                   onClick={async () => {
-                    if (!window.confirm(`Clear the activity log of ${upn}? This removes the stored event history for this mailbox only.`)) return;
+                    if (!await dialog.confirm({ title: 'Clear activity log', danger: true, okText: 'Clear', message: `Clear the activity log of ${upn}? This removes the stored event history for this mailbox only.` })) return;
                     try { await del('/api/mailbox/' + encodeURIComponent(upn) + '/events'); load(); }
                     catch (e) { setErr(e.message); }
                   }}>
@@ -286,10 +287,11 @@ function PstRepairPanel({ pr, upn, onChanged }) {
   const total = pr.rebuiltItems + pr.remainingFts;
   const pct = total ? Math.round(100 * pr.rebuiltItems / total) : 0;
   const [busy, setBusy] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const run = async () => {
     setBusy(true);
     try { await post('/api/mailbox/' + encodeURIComponent(upn) + '/pst-repair', {}); }
-    catch (e) { alert(e.message); }
+    catch (e) { dialog.notify(e.message, 'error'); }
     setBusy(false);
     onChanged && onChanged();
   };
@@ -301,7 +303,10 @@ function PstRepairPanel({ pr, upn, onChanged }) {
         <span style={{ flex: 1 }} />
         {pr.running
           ? <span className="muted">Running… {pr.lastLine ? pr.lastLine.slice(0, 60) : ''}</span>
-          : <button className="btn small" disabled={busy} onClick={run}>{busy ? 'Starting…' : 'Run PST recovery'}</button>}
+          : <>
+              <button className="btn small" onClick={() => setReportOpen(true)}>Rebuild report</button>
+              <button className="btn small" disabled={busy} onClick={run}>{busy ? 'Starting…' : 'Run PST recovery'}</button>
+            </>}
       </div>
       <div className="cov-scope">
         <span className="cov-scope-label">PSTs imported</span>
@@ -333,6 +338,56 @@ function PstRepairPanel({ pr, upn, onChanged }) {
           ))}
         </div>
       )}
+      {reportOpen && <PstRepairReportModal upn={upn} onClose={() => setReportOpen(false)} />}
+    </div>
+  );
+}
+
+function PstRepairReportModal({ upn, onClose }) {
+  const [r, setR] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    api('/api/mailbox/' + encodeURIComponent(upn) + '/pst-repair/report').then(setR).catch(e => setErr(e.message));
+  }, [upn]);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card settings-card" role="dialog" aria-modal="true" aria-label="PST rebuild report" onClick={e => e.stopPropagation()}>
+        <div className="settings-head">
+          <h3>PST rebuild report</h3>
+          <button className="btn small" onClick={onClose} aria-label="Close report">✕</button>
+        </div>
+        {err && <p className="warn-text">{err}</p>}
+        {!r && !err && <p className="muted">Loading…</p>}
+        {r && r.filesWithStats === 0 && <p className="muted">No per-folder data yet — run PST recovery once more (the latest run records per-folder stats).</p>}
+        {r && r.filesWithStats > 0 && (
+          <>
+            <p className="muted">{r.folders.length} folders touched · latest run {r.lastRunAt ? fmtDateTime(r.lastRunAt) : '—'}</p>
+            <div className="cov-partitions" style={{ maxHeight: '50vh' }}>
+              <table className="report-table">
+                <thead><tr><th>Folder</th><th>Rebuilt</th><th>Skipped</th><th>Unmatched</th><th>Failed</th><th>Verify</th></tr></thead>
+                <tbody>
+                  {r.folders.map(f => (
+                    <tr key={f.path}>
+                      <td title={f.path}>{f.path}</td>
+                      <td>{f.replaced.toLocaleString()}</td>
+                      <td>{f.skipped.toLocaleString()}</td>
+                      <td>{f.unmatched.toLocaleString()}</td>
+                      <td>{f.failed > 0 ? <span className="warn-text">{f.failed.toLocaleString()}</span> : 0}</td>
+                      <td>{f.verifyFailures > 0 ? <span className="warn-text">{f.verifyFailures}</span> : 0}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {r.imageVerify && (
+              <p className="muted" style={{ marginTop: 8 }}>
+                Image verification ({fmtDateTime(r.imageVerify.at)}): {r.imageVerify.checked.toLocaleString()} checked ·{' '}
+                {r.imageVerify.bad > 0 ? <span className="warn-text">{r.imageVerify.bad.toLocaleString()} with broken images</span> : <span className="good-text">all clean</span>}
+              </p>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

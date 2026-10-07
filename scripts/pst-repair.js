@@ -84,7 +84,7 @@ function verifyImages(parsed) {
 
 async function processPst(pstPath, log) {
   const pst = new PSTFile(pstPath);
-  const rec = { file: path.basename(pstPath), startedAt: new Date().toISOString(), folders: 0, messages: 0, replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0, bytes: 0 };
+  const rec = { file: path.basename(pstPath), startedAt: new Date().toISOString(), folders: 0, messages: 0, replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0, bytes: 0, folderStats: [] };
   const walk = async (folder, parentPath) => {
     let name = '';
     try { name = folder.displayName || ''; } catch { }
@@ -101,6 +101,8 @@ async function processPst(pstPath, log) {
       if (dbFolder) {
         rec.folders++;
         const scope = dbFolder.scope;
+        const folderStat = { path: dbFolder.path || fullPath, replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0 };
+        rec.folderStats.push(folderStat);
         const dbItems = store.db.prepare(`SELECT * FROM items WHERE upn=? AND scope=? AND folderId=? AND status='done'`).all(upn, scope, dbFolder.folderId);
         const byKey = new Map();
         for (const it of dbItems) {
@@ -128,27 +130,33 @@ async function processPst(pstPath, log) {
               : null;
             let dbItem = closest(byKey.get(`${normSubj(subject)}|${minOf(receivedAt)}`));
             if (!dbItem && subject) dbItem = closest(dbItems.filter(it => normSubj(it.subject) === normSubj(subject)));
-            if (!dbItem) { rec.unmatched++; continue; }
-            if (dbItem.format === 'eml' && !(FORCE && dbItem.sourceApi === 'pst-import')) { rec.skipped++; continue; }
+            if (!dbItem) { rec.unmatched++; folderStat.unmatched++; continue; }
+            // PST is primary: replace any matched local copy — except an
+            // identical earlier pst-import rebuild (cheap idempotency).
+            if (dbItem.format === 'eml' && dbItem.sourceApi === 'pst-import' && !FORCE) { rec.skipped++; folderStat.skipped++; continue; }
             const eml = buildEml(child);
+            const sha = crypto.createHash('sha256').update(eml).digest('hex');
+            if (dbItem.sourceApi === 'pst-import' && dbItem.sha256 === sha && !FORCE) { rec.skipped++; folderStat.skipped++; continue; }
             // verification: parse + image trailers
             const parsed = await simpleParser(eml);
             const v = verifyImages(parsed);
             if (v.bad) {
               rec.verifyFailures++;
+              folderStat.verifyFailures++;
               console.log(`  VERIFY FAIL (${v.bad}/${v.images} images): ${String(subject).slice(0, 60)}`);
             }
             if (!DRY) {
               await fsp.writeFile(path.join(dir, dbItem.fileId + '.tmp'), zlib.gzipSync(eml));
               await fsp.rename(path.join(dir, dbItem.fileId + '.tmp'), path.join(dir, dbItem.fileId + '.eml.gz'));
               await fsp.rm(path.join(dir, dbItem.fileId + '.fts.gz'), { force: true });
-              upd.run(subject, sender, receivedAt, eml.length, crypto.createHash('sha256').update(eml).digest('hex'), upn, scope, dbFolder.folderId, dbItem.itemId);
+              upd.run(subject, sender, receivedAt, eml.length, sha, upn, scope, dbFolder.folderId, dbItem.itemId);
               dbItem.format = 'eml';
             }
             rec.replaced++;
+            folderStat.replaced++;
             rec.bytes += eml.length;
             if (rec.replaced % 50 === 0) console.log(`  …${rec.replaced} replaced`);
-          } catch (e) { rec.failed++; console.log(`  FAIL: ${String(e.message || e).slice(0, 120)}`); }
+          } catch (e) { rec.failed++; folderStat.failed++; console.log(`  FAIL: ${String(e.message || e).slice(0, 120)}`); }
         }
       } else {
         // consume messages so the walk stays in sync, count as unmatched-folder

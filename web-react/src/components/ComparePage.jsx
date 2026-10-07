@@ -3,6 +3,14 @@ import { createPortal } from 'react-dom';
 import { api, post, withToken } from '../api.js';
 import { fmtBytes, fmtDateTime } from '../format.js';
 import { ScopeTree, qs } from './browse.jsx';
+import { dialog } from '../dialog.jsx';
+
+const elapsed = iso => {
+  if (!iso) return '';
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+};
 
 // Vertical drag handle; onDrag receives the pointer's clientX while dragging.
 function DragBar({ onDrag }) {
@@ -181,6 +189,30 @@ export default function ComparePage({ upn }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyRows, setHistoryRows] = useState(null);
 
+  // Task manager + history share one panel: a running copy shows live at the
+  // top and becomes a history row once it finishes. Polled always so the
+  // header badge is accurate even after a page refresh mid-run.
+  const [tasksProg, setTasksProg] = useState(null);   // /api/compare/progress
+  const [copyJobs, setCopyJobs] = useState([]);        // running copy-engine jobs
+  useEffect(() => {
+    const tick = () => {
+      api('/api/compare/progress').then(p => setTasksProg(p && p.running ? p : null)).catch(() => { });
+      api('/api/status').then(s => setCopyJobs((s.jobs || []).filter(j => j.kind === 'copy' && j.status === 'running'))).catch(() => { });
+    };
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => clearInterval(t);
+  }, []);
+  const runningCopies = (tasksProg ? 1 : 0) + copyJobs.length;
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const t = setInterval(() => {
+      api('/api/compare/history').then(d => setHistoryRows(d.rows)).catch(() => { });
+    }, 3000);
+    return () => clearInterval(t);
+  }, [historyOpen]);
+
   // Resizable splits: outer left/right + per-side folders/items
   const bodyRef = useRef(null);
   const leftSplitRef = useRef(null);
@@ -323,13 +355,47 @@ export default function ComparePage({ upn }) {
     }).catch(() => { });
   }, []);
 
+  // A transfer runs synchronously server-side, often for many minutes. If the
+  // HTTP connection drops mid-run ("Failed to fetch"), the job usually still
+  // started and keeps running — keep `busy` so the progress poll finishes it
+  // instead of showing a dead error. Returns true when a run is live.
+  const transferStillRunning = async e => {
+    if (!String(e.message).includes('Failed to fetch')) return false;
+    for (let i = 0; i < 5; i++) {
+      try {
+        const p = await api('/api/compare/progress');
+        if (p && p.running) return true;
+      } catch { }
+      await new Promise(r => setTimeout(r, 800));
+    }
+    return false;
+  };
+
   const doTransfer = async (direction, mode) => {
     const isToLive = direction === 'toLive';
     const srcItems = isToLive ? leftItems : rightItems;
     const srcChecked = isToLive ? leftChecked : rightChecked;
     const picked = (srcItems || []).filter(it => srcChecked.has(it.key));
     if (!picked.length) return;
-    if (mode === 'move' && !window.confirm(`Move ${picked.length} email(s)? Source copies will be removed (recoverable).`)) return;
+    if (mode === 'move' && !await dialog.confirm({ title: 'Move emails', danger: true, okText: 'Move', message: `Move ${picked.length} email(s)? Source copies will be removed (recoverable).` })) return;
+    // toLocal: when a subfolder is selected as destination, offer the root too —
+    // copies to the mailbox should not silently land inside a random folder.
+    let dstLocal = leftFolder;
+    if (!isToLive) {
+      const rootRow = (leftFolders || []).find(f => f.scope === leftScope && (f.path === 'Archive root' || f.path === 'Mailbox root' || f.path === 'Root'));
+      if (rootRow && leftFolder.folderId !== rootRow.folderId) {
+        const where = await dialog.choose({
+          title: 'Destination',
+          message: `Copy ${picked.length} email(s) into the selected folder, or into the ${rootRow.name} (top level)?`,
+          options: [
+            { label: `Into "${leftFolder.name}"`, value: 'folder' },
+            { label: `Into ${rootRow.name} (root)`, value: 'root' }
+          ]
+        });
+        if (where === null) return;
+        if (where === 'root') dstLocal = rootRow;
+      }
+    }
     const body = isToLive
       ? {
         direction, mode, srcUpn: leftUpn, dstUpn: rightUpn, dstFolderId: rightFolder.folderId, dstName: rightFolder.name, srcName: leftFolder.name,
@@ -337,11 +403,12 @@ export default function ComparePage({ upn }) {
       }
       : {
         direction, mode, srcUpn: rightUpn, dstUpn: leftUpn, dstScope: leftScope,
-        srcFolderId: rightFolder.folderId, dstName: leftFolder.name, srcName: rightFolder.name,
-        dstFolder: { folderId: leftFolder.folderId, parentId: leftFolder.parentId, name: leftFolder.name, path: leftFolder.path },
+        srcFolderId: rightFolder.folderId, dstName: dstLocal.name, srcName: rightFolder.name,
+        dstFolder: { folderId: dstLocal.folderId, parentId: dstLocal.parentId, name: dstLocal.name, path: dstLocal.path },
         items: picked.map(it => ({ id: it.id }))
       };
     setBusy(true); setResult(null); setErr(null);
+    let keepBusy = false;
     try {
       const r = await post('/api/compare/transfer', body);
       const errs = r.results.filter(x => x.error).slice(0, 3).map(x => x.error);
@@ -352,9 +419,10 @@ export default function ComparePage({ upn }) {
       loadRightItems();
       if (isToLive) loadRightFolders(true);
     } catch (e) {
-      setErr(e.message);
+      if (await transferStillRunning(e)) keepBusy = true;
+      else setErr(e.message);
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   };
 
@@ -396,8 +464,25 @@ export default function ComparePage({ upn }) {
     const subtreeRows = isToLive
       ? subtreeOf(leftFolders.filter(f => f.scope === leftScope), leftFolder.folderId)
       : subtreeOf(rightFolders, rightFolder.folderId);
-    const dstLabel = dst ? `'${dst.name}'` : 'the mailbox root';
-    if (!window.confirm(`Copy folder '${src.name}' into ${dstLabel}?\n\nSubtree: ${subtreeRows.length} folder(s), incl. subfolders. Same-named folders are merged; existing emails are skipped.`)) return;
+    // toLocal: a selected subfolder may not be the intent — offer the root too.
+    let dstLocal = dst;
+    if (!isToLive && dst) {
+      const rootRow = (leftFolders || []).find(f => f.scope === leftScope && (f.path === 'Archive root' || f.path === 'Mailbox root' || f.path === 'Root'));
+      if (rootRow && dst.folderId !== rootRow.folderId) {
+        const where = await dialog.choose({
+          title: 'Destination',
+          message: `Copy folder '${src.name}' (${subtreeRows.length} folders incl. subfolders) — where should it land?`,
+          options: [
+            { label: `Into "${dst.name}"`, value: 'folder', primary: true },
+            { label: `Into ${rootRow.name} (root)`, value: 'root' }
+          ]
+        });
+        if (where === null) return;
+        if (where === 'root') dstLocal = rootRow;
+      }
+    }
+    const dstLabel = dstLocal ? `'${dstLocal.name}'` : 'the mailbox root';
+    if (!await dialog.confirm({ title: 'Copy folder', okText: 'Copy', message: `Copy folder '${src.name}' into ${dstLabel}?\n\nSubtree: ${subtreeRows.length} folder(s), incl. subfolders. Same-named folders are merged; existing emails are skipped.` })) return;
     const body = isToLive
       ? {
         direction, srcUpn: leftUpn, dstUpn: rightUpn,
@@ -407,11 +492,12 @@ export default function ComparePage({ upn }) {
       : {
         direction, srcUpn: rightUpn, dstUpn: leftUpn, dstScope: leftScope,
         srcFolder: { folderId: rightFolder.folderId, name: rightFolder.name },
-        dstName: leftFolder ? leftFolder.name : '',
+        dstName: dstLocal ? dstLocal.name : '',
         srcFolders: subtreeRows.map(({ folderId, parentId, name, path, itemCount }) => ({ folderId, parentId, name, path, itemCount })),
-        dstFolder: leftFolder ? { folderId: leftFolder.folderId, parentId: leftFolder.parentId, name: leftFolder.name, path: leftFolder.path } : null
+        dstFolder: dstLocal ? { folderId: dstLocal.folderId, parentId: dstLocal.parentId, name: dstLocal.name, path: dstLocal.path } : null
       };
     setBusy(true); setResult(null); setErr(null);
+    let keepBusy = false;
     try {
       const r = await post('/api/compare/transfer-folder', body);
       setResult(`folder copy: ${r.done} copied, ${r.skipped} skipped (already present), ${r.failed} failed across ${r.folders} folders${r.stopped ? ' — stopped' : ''}${r.errors && r.errors.length ? ' — ' + r.errors.slice(0, 3).join(' · ') : ''}`);
@@ -421,17 +507,19 @@ export default function ComparePage({ upn }) {
       loadRightItems();
       if (isToLive) loadRightFolders(true);
     } catch (e) {
-      setErr(e.message);
+      if (await transferStillRunning(e)) keepBusy = true;
+      else setErr(e.message);
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   };
 
   // Reverse the last compare transfer (single-item or folder, either direction).
   const doUndo = async () => {
     if (!undoInfo) return;
-    if (!window.confirm(`Undo last action: ${undoInfo.label}?`)) return;
+    if (!await dialog.confirm({ title: 'Undo last action', okText: 'Undo', message: `Undo last action: ${undoInfo.label}?` })) return;
     setBusy(true); setResult(null); setErr(null);
+    let keepBusy = false;
     try {
       const r = await post('/api/compare/undo', {});
       setResult(`undo: ${r.undone} undone, ${r.failed} failed${r.errors && r.errors.length ? ' — ' + r.errors.slice(0, 3).join(' · ') : ''}`);
@@ -439,11 +527,11 @@ export default function ComparePage({ upn }) {
       loadLeftFolders();
       loadLeftItems();
       loadRightItems();
-      loadRightFolders(true);
     } catch (e) {
-      setErr(e.message);
+      if (await transferStillRunning(e)) keepBusy = true;
+      else setErr(e.message);
     } finally {
-      setBusy(false);
+      if (!keepBusy) setBusy(false);
     }
   };
 
@@ -469,7 +557,9 @@ export default function ComparePage({ upn }) {
           <label><input type="checkbox" checked={showGuests} onChange={e => setShowGuests(e.target.checked)} /> guests</label>
         </span>
         <span className="spacer" />
-        <button className="btn small" title="Show the transfer history (every copy/move/folder/undo action, newest first)" onClick={() => { setHistoryOpen(true); setHistoryRows(null); api('/api/compare/history').then(d => setHistoryRows(d.rows)).catch(e => setErr(e.message)); }}>History</button>
+        <button className="btn small" title="Running copies (live, with stop) and the transfer history — a task becomes a history row when it finishes" onClick={() => { setHistoryOpen(true); setHistoryRows(null); api('/api/compare/history').then(d => setHistoryRows(d.rows)).catch(e => setErr(e.message)); }}>
+          Tasks{runningCopies > 0 ? ` (${runningCopies})` : ''}
+        </button>
         <button className="btn small" disabled={busy || !undoInfo} title={undoInfo ? `Undo last action: ${undoInfo.label}` : 'Nothing to undo'} onClick={doUndo}>↩ Undo</button>
         <button className="btn small" title="Clear both mailbox selections (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
         <a className="btn small" href={upn ? `/?mailbox=${encodeURIComponent(upn)}` : '/'}>← Back</a>
@@ -487,7 +577,8 @@ export default function ComparePage({ upn }) {
               </div>
               {prog && (prog.src || prog.dst) && (
                 <div className="compare-prog-route muted">
-                  <span>{prog.src}</span><span className="compare-prog-arrow">→</span><span>{prog.dst}</span>
+                  <div><b>From:</b> {prog.src || '—'}</div>
+                  <div><b>To:</b> {prog.dst || '—'}</div>
                 </div>
               )}
             </div>
@@ -499,7 +590,7 @@ export default function ComparePage({ upn }) {
               <span className="muted">→ {prog?.skipped ?? 0} skipped</span>
               <span className="bad-text">✗ {prog?.failed ?? 0} failed</span>
               {prog && prog.kind === 'folder' && (
-                <span className="muted" title={prog.currentFolder || ''}>folder {prog.foldersDone}/{prog.foldersTotal}{prog.currentFolder ? ` · ${prog.currentFolder}` : ''}</span>
+                <span className="muted" title={prog.currentFolder || ''}>copying folder {prog.foldersDone}/{prog.foldersTotal}{prog.currentFolder ? `: ${prog.currentFolder}` : ''}</span>
               )}
             </div>
             <button className="btn small danger" title="Stop the running transfer after the current email (copies made so far are kept — use Undo to reverse them)" onClick={() => post('/api/stop/compare', {}).catch(e => setErr(e.message))}>■ Stop</button>
@@ -640,14 +731,58 @@ export default function ComparePage({ upn }) {
         <div className="modal-overlay" onClick={() => setHistoryOpen(false)}>
           <div className="modal-box compare-pv-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>Transfer history</h3>
-              <span className="muted">every copy/move/folder/undo action, newest first</span>
+              <h3>Tasks &amp; history</h3>
+              <span className="muted">running copies on top; once finished they become history rows below</span>
               <span className="spacer" />
               <button className="btn small" onClick={() => setHistoryOpen(false)}>Close</button>
             </div>
             <div className="modal-body">
+              {runningCopies > 0 && <div className="task-sep muted">Running now</div>}
+              {tasksProg && (
+                <div className="task-card">
+                  <div className="task-head">
+                    <b>{tasksProg.label || 'Compare transfer'}</b>
+                    <span className="chip syncing"><i className="sdot" />running</span>
+                    <span className="spacer" />
+                    <button className="btn small danger" title="Stop after the current email (copies made so far are kept — use Undo to reverse them)" onClick={() => post('/api/stop/compare', {}).catch(e => setErr(e.message))}>Stop</button>
+                  </div>
+                  {(tasksProg.src || tasksProg.dst) && (
+                    <>
+                      <div className="muted task-detail"><b>From:</b> {tasksProg.src || '—'}</div>
+                      <div className="muted task-detail"><b>To:</b> {tasksProg.dst || '—'}</div>
+                    </>
+                  )}
+                  <div className="muted task-detail">
+                    {tasksProg.done} copied · {tasksProg.skipped} skipped · {tasksProg.failed} failed
+                    {tasksProg.itemsTotal ? ` · ${tasksProg.itemsDone}/${tasksProg.itemsTotal} items` : ''}
+                    {tasksProg.startedAt ? ` · started ${elapsed(tasksProg.startedAt)} ago` : ''}
+                  </div>
+                  {tasksProg.itemsTotal ? <div className="bar task-bar"><div className="fill" style={{ width: Math.min(100, Math.round(100 * tasksProg.itemsDone / tasksProg.itemsTotal)) + '%' }} /></div> : null}
+                  {tasksProg.kind === 'folder' && (
+                    <div className="muted task-detail mono">
+                      copying folder {tasksProg.foldersDone}/{tasksProg.foldersTotal}{tasksProg.currentFolder ? `: ${tasksProg.currentFolder}` : ''}
+                    </div>
+                  )}
+                </div>
+              )}
+              {copyJobs.map(j => (
+                <div className="task-card" key={'copyjob-' + j.id}>
+                  <div className="task-head">
+                    <b>Copy job</b>
+                    <span className="chip syncing"><i className="sdot" />running</span>
+                    <span className="spacer" />
+                    <button className="btn small danger" title="Stop the running copy job" onClick={() => post('/api/stop/copy', {}).catch(e => setErr(e.message))}>Stop</button>
+                  </div>
+                  <div className="muted task-detail">
+                    {j.done}/{j.total}{j.total ? ` (${Math.round(100 * j.done / j.total)}%)` : ''} {j.detail || ''}
+                    {j.startedAt ? ` · started ${elapsed(j.startedAt)} ago` : ''}
+                  </div>
+                  {j.total ? <div className="bar task-bar"><div className="fill" style={{ width: Math.round(100 * j.done / j.total) + '%' }} /></div> : null}
+                </div>
+              ))}
+              <div className="task-sep muted">History (newest first)</div>
               {!historyRows && <p className="muted pane-hint">Loading…</p>}
-              {historyRows && historyRows.length === 0 && <p className="muted pane-hint">No transfers recorded yet.</p>}
+              {historyRows && historyRows.length === 0 && runningCopies === 0 && <p className="muted pane-hint">No transfers recorded yet.</p>}
               {(historyRows || []).map(r => (
                 <div key={r.id} className="hist-row">
                   <span className="hist-ts muted">{fmtDateTime(r.ts)}</span>

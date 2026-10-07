@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api, del, post } from '../api.js';
 import PstPlanBuilder from './PstPlanBuilder.jsx';
+import { dialog } from '../dialog.jsx';
 import CopyWizard from './CopyWizard.jsx';
 import DedupeModal from './DedupeModal.jsx';
 import { ScopePanel } from './browse.jsx';
@@ -29,14 +30,14 @@ function MailboxCard({ upn, onChanged }) {
     return () => clearInterval(t);
   }, [load]);
 
-  const removeBackup = scope => {
+  const removeBackup = async scope => {
     const what = scope ? `the stored ${scope} backup` : 'the stored backup (primary + archive)';
-    if (!window.confirm(`Delete ${what} of ${upn}? Locally stored emails (.eml.gz) and database records for ${scope ? 'that scope' : 'both scopes'} will be removed. This cannot be undone.`)) return;
+    if (!await dialog.confirm({ title: 'Delete backup', danger: true, okText: 'Delete', message: `Delete ${what} of ${upn}? Locally stored emails (.eml.gz) and database records for ${scope ? 'that scope' : 'both scopes'} will be removed. This cannot be undone.` })) return;
     setDeleting(true);
     del('/api/mailbox/' + encodeURIComponent(upn) + '/backup' + (scope ? '?scope=' + scope : '')).then(onChanged).catch(e => setErr(e.message)).finally(() => setDeleting(false));
   };
-  const removePst = () => {
-    if (!window.confirm(`Delete all exported PST files of ${upn}? This cannot be undone.`)) return;
+  const removePst = async () => {
+    if (!await dialog.confirm({ title: 'Delete PST files', danger: true, okText: 'Delete', message: `Delete all exported PST files of ${upn}? This cannot be undone.` })) return;
     setDeleting(true);
     del('/api/pst/' + encodeURIComponent(upn)).then(onChanged).catch(e => setErr(e.message)).finally(() => setDeleting(false));
   };

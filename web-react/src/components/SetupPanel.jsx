@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api, post } from '../api.js';
+import { dialog } from '../dialog.jsx';
 
 export default function SetupPanel({ onDone }) {
   const [s, setS] = useState(null);
@@ -25,8 +26,8 @@ export default function SetupPanel({ onDone }) {
     post('/api/setup/login').then(setS).catch(e => setS({ state: 'error', message: e.message })).finally(() => setStarting(false));
   };
   const archive = () => { setS(x => x ? { ...x, archiveNote: null } : x); post('/api/setup/archive').catch(() => {}); };
-  const disconnect = () => {
-    if (!window.confirm('Disconnect this tenant? The stored credentials will be removed from config.json.')) return;
+  const disconnect = async () => {
+    if (!await dialog.confirm({ title: 'Disconnect tenant', danger: true, okText: 'Disconnect', message: 'Disconnect this tenant? The stored credentials will be removed from config.json.' })) return;
     post('/api/setup/disconnect').then(setS).catch(e => setS({ state: 'error', message: e.message }));
   };
   return (

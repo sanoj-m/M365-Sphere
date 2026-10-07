@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { del, post } from '../api.js';
+import { dialog } from '../dialog.jsx';
 
 const ACTIVE = ['queued', 'waiting', 'verify', 'backup'];
 const upnOf = s => { const m = /[\w.+-]+@[\w-]+\.[\w.]+/.exec(String(s || '')); return m ? m[0] : null; };
@@ -31,9 +32,9 @@ function TaskLogs({ lines }) {
 }
 
 function StopBtn({ kind, label }) {
-  const stop = () => {
-    if (!window.confirm(`${label}: stop the running ${kind} job? Partially exported folders are kept; the export resumes from the manifest next run.`)) return;
-    post(stopPath[kind] || '/api/stop', {}).catch(e => window.alert(`Stop failed: ${e.message}`));
+  const stop = async () => {
+    if (!await dialog.confirm({ title: `Stop ${kind}`, message: `${label}: stop the running ${kind} job? Partially exported folders are kept; the export resumes from the manifest next run.` })) return;
+    post(stopPath[kind] || '/api/stop', {}).catch(e => dialog.notify(`Stop failed: ${e.message}`, 'error'));
   };
   return <button className="btn small danger" onClick={stop}>Stop</button>;
 }
@@ -56,7 +57,7 @@ export default function TasksPanel({ status, logs }) {
     return () => clearInterval(t);
   }, []);
 
-  const cancel = id => del('/api/tasks/' + id).catch(e => window.alert('Cancel failed: ' + e.message));
+  const cancel = id => del('/api/tasks/' + id).catch(e => dialog.notify('Cancel failed: ' + e.message, 'error'));
 
   const empty = !jobs.length && !activeFix.length && !finishedFix.length && !exoExport.running;
   return (

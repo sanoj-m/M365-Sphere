@@ -1804,3 +1804,34 @@ body.compare-mode #root { padding: 0; }
 .info-tip:hover .info-pop, .info-tip:focus-within .info-pop { display: block; }
 
 .dedupe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 18px; padding: 0 18px 18px; align-items: start; }
+
+/* ---------- PST rebuild report table ---------- */
+.report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.report-table th { text-align: left; padding: 4px 8px; position: sticky; top: 0; background: var(--color-card); border-bottom: 1px solid var(--color-secondary); }
+.report-table td { padding: 3px 8px; border-bottom: 1px solid var(--color-secondary); max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- In-app dialogs & toasts ---------- */
+.dialog-backdrop { backdrop-filter: blur(2px); }
+.app-dialog {
+  display: flex; gap: var(--space-lg); align-items: flex-start;
+  max-width: 520px; width: calc(100vw - 48px);
+  padding: 22px 24px; border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+}
+.dialog-icon {
+  flex: none; width: 38px; height: 38px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 19px; font-weight: 700; margin-top: 2px;
+}
+.dialog-icon.info { background: rgba(88,157,255,0.15); color: #6aa5ff; }
+.dialog-icon.danger { background: rgba(224,82,82,0.15); color: #e05252; }
+.dialog-icon.choose { background: rgba(80,200,140,0.15); color: #50c88c; }
+.dialog-body { flex: 1; min-width: 0; }
+.dialog-title { margin: 2px 0 8px; font-size: 15px; font-weight: 600; }
+.dialog-message { white-space: pre-wrap; font-size: 13.5px; line-height: 1.55; color: var(--color-muted-foreground); margin: 0 0 18px; }
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.btn.small.ghost { background: transparent; }
+.btn.small.primary { background: var(--color-accent); color: #fff; }
+.app-toasts { position: fixed; right: 20px; bottom: 20px; z-index: 90; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 40px)); }
+.app-toast { background: var(--color-card); border: 1px solid var(--color-secondary); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 10px 28px rgba(0,0,0,0.4); cursor: pointer; }
+.app-toast.error { border-color: #d64545; }
