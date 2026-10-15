@@ -16,7 +16,9 @@ const { Exo } = require('./lib/exo');
 const { ExoExport } = require('./lib/exoexport');
 const { PstIngest } = require('./lib/pstingest');
 const { CopyEngine } = require('./lib/copy');
-const { DedupeEngine } = require('./lib/dedupe');
+const { DedupeEngine, fuzzyDupes } = require('./lib/dedupe');
+const { CopyEmailEngine } = require('./lib/copyemail');
+const { MoveEmailEngine } = require('./lib/moveemail');
 const { parseStoredItem, toPreview, readRaw, chainPath, itemFile } = require('./lib/preview');
 const { simpleParser } = require('mailparser');
 const zlib = require('zlib');
@@ -25,7 +27,7 @@ const { Readable } = require('stream');
 const fsp = require('fs/promises');
 const { ftsPreview, ftsAttachment } = require('./lib/fts');
 const { safeName, isValidUpn } = require('./lib/util');
-const { computeCoverage, refreshCoverage } = require('./lib/coverage');
+const { computeCoverage, refreshCoverage, scopeCoverage } = require('./lib/coverage');
 const archiver = require('archiver');
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
@@ -85,8 +87,28 @@ const pst = new PstExporter({ cfg, store, log, bus });
 const setup = new Setup({ cfg, log, configPath: CONFIG_PATH });
 const exo = new Exo({ cfg, log, bus, auth });
 const exoExport = new ExoExport({ cfg, store, log, bus, auth, ingest: new PstIngest({ cfg, store, log, bus }) });
-const copyEngine = new CopyEngine({ cfg, store, graph, log, bus });
+const copyEngine = new CopyEngine({ cfg, store, graph, ews, log, bus });
 const dedupeEngine = new DedupeEngine({ cfg, store, graph, log, bus });
+const copyEmailEngine = new CopyEmailEngine({ cfg, store, graph, ews, engine, log, bus });
+const moveEmailEngine = new MoveEmailEngine({ cfg, store, graph, ews, engine, log, bus });
+// Copy-email queue rows for /api/status + GET /api/copy-email/queue.
+function copyQueueRows() {
+  return store.copyQueueAll().map(r => {
+    let cfg = {};
+    try { cfg = JSON.parse(r.config || '{}'); } catch { }
+    return {
+      id: r.id, createdAt: r.createdAt, srcUpn: r.srcUpn, dstUpn: r.dstUpn, target: r.target,
+      dstLabel: cfg.dstLabel || null,
+      srcLabel: cfg.srcLabel || null,
+      dstFolderId: cfg.dst && cfg.dst.folderId || null,
+      srcMode: cfg.srcMode || 'store',
+      srcFolderKey: Array.isArray(cfg.folderKeys) && cfg.folderKeys[0] || null,
+      items: Array.isArray(cfg.items) ? cfg.items.length : 0,
+      folders: Array.isArray(cfg.folderKeys) ? cfg.folderKeys.length : 0,
+      retryOf: cfg.retryOf || null
+    };
+  });
+}
 // Device sign-in prompt for an in-flight EXO sizes job, exposed via /api/status
 // (same pattern as archiveSignIn in /api/setup/status).
 let exoSignIn = null;
@@ -144,11 +166,24 @@ app.get('/api/status', wrap(async () => ({
   pstDetail: pst.detail(),
   copyRunning: copyEngine.running,
   dedupeRunning: dedupeEngine.running,
+  copyEmailRunning: copyEmailEngine.running,
+  copyEmailRuns: [...copyEmailEngine.runProgress.values()],
+  copyEmailQueue: copyQueueRows(),
+  moveEmailRunning: moveEmailEngine.running,
+  moveEmailRuns: [...moveEmailEngine.runProgress.values()],
   dedupeRuns: [...dedupeEngine._runs.keys()],
   dedupeChecks: [...dedupeEngine.checkProgress.values()],
   sizesRunning,
   scanRunning,
   exoExport: exoExport.summary(),
+  liveMove: (() => {
+    try {
+      const p = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'live-move-progress.json'), 'utf8'));
+      let running = false;
+      try { process.kill(p.pid, 0); running = p.state === 'running'; } catch { }
+      return { ...p, running };
+    } catch { return null; }
+  })(),
   fixTasks: fixTasks.slice(-60),
   exoSignIn,
   autoResumeSuppressed,
@@ -172,7 +207,16 @@ app.get('/api/mailbox/:upn', wrap(async req => {
   const ewsArch = m.ewsArchiveBytes != null ? m.ewsArchiveBytes : m.archiveBytes;
   const archiveGapBytes = m.autoExpandingArchive && m.serverArchiveBytes != null && ewsArch != null
     ? Math.max(0, m.serverArchiveBytes - ewsArch) : null;
-  return { ...m, archiveGapBytes, folders: store.listFolders(m.upn), report, events: store.mailboxEvents(m.upn, 100), live: engine.live[m.upn] || null };
+  // EXO supplies archive BYTES only, never an item count, so serverArchiveItems
+  // stays null and the UI falls back to the main-partition folder counts (~20x
+  // undercount once aux partitions are ingested). Derive the full archive item
+  // total instead: main-partition folder counts + auxiliary partition counts.
+  let serverArchiveItems = m.serverArchiveItems;
+  if (m.hasArchive) {
+    const derived = scopeCoverage(store, m.upn, 'archive').serverItems;
+    if (derived > (serverArchiveItems || 0)) serverArchiveItems = derived;
+  }
+  return { ...m, serverArchiveItems, archiveGapBytes, folders: store.listFolders(m.upn), report, events: store.mailboxEvents(m.upn, 100), live: engine.live[m.upn] || null };
 }));
 app.get('/api/mailbox/:upn/folders', wrap(async req => {
   const m = store.getMailbox(req.params.upn);
@@ -232,16 +276,23 @@ app.get('/api/mailbox/:upn/pst-repair', wrap(async req => {
   const onDisk = fs.existsSync(pstDir)
     ? fs.readdirSync(pstDir).filter(f => f.toLowerCase().endsWith('.pst') && !f.startsWith('~')).sort()
     : [];
+  const verifyResults = pstVerifyState.results();
   const psts = onDisk.map(f => {
     const rec = byFile.get(f);
-    return { file: f, size: fs.statSync(path.join(pstDir, f)).size, processed: !!rec, replaced: rec?.replaced || 0, verifyFailures: rec?.verifyFailures || 0, finishedAt: rec?.finishedAt || null };
+    const v = verifyResults.get(f);
+    return {
+      file: f, size: fs.statSync(path.join(pstDir, f)).size, processed: !!rec,
+      replaced: rec?.replaced || 0, skipped: rec?.skipped || 0, unmatched: rec?.unmatched || 0, failed: rec?.failed || 0,
+      verifyFailures: rec?.verifyFailures || 0, finishedAt: rec?.finishedAt || null,
+      verify: v ? { status: v.status, remark: v.remark || '', checkedAt: v.checkedAt, retry: !!v.retry } : null
+    };
   });
-  for (const [f, rec] of byFile) if (!onDisk.includes(f)) psts.push({ file: f, size: null, processed: true, replaced: rec.replaced || 0, verifyFailures: rec.verifyFailures || 0, finishedAt: rec.finishedAt || null, missing: true });
+  for (const [f, rec] of byFile) if (!onDisk.includes(f)) psts.push({ file: f, size: null, processed: true, replaced: rec.replaced || 0, skipped: rec.skipped || 0, unmatched: rec.unmatched || 0, failed: rec.failed || 0, verifyFailures: rec.verifyFailures || 0, finishedAt: rec.finishedAt || null, missing: true, verify: verifyResults.get(f) ? { status: verifyResults.get(f).status, remark: verifyResults.get(f).remark || '', checkedAt: verifyResults.get(f).checkedAt, retry: !!verifyResults.get(f).retry } : null });
   const rebuilt = store.db.prepare(`SELECT COUNT(*) c, COALESCE(SUM(size),0) bytes FROM items WHERE upn=? AND sourceApi='pst-import'`).get(m.upn);
   const remaining = store.db.prepare(`SELECT COUNT(*) c FROM items WHERE upn=? AND format='fts' AND status='done'`).get(m.upn);
   const totals = log.reduce((a, r) => ({ replaced: a.replaced + r.replaced, skipped: a.skipped + r.skipped, unmatched: a.unmatched + r.unmatched, failed: a.failed + r.failed, verifyFailures: a.verifyFailures + (r.verifyFailures || 0) }),
     { replaced: 0, skipped: 0, unmatched: 0, failed: 0, verifyFailures: 0 });
-  return { upn: m.upn, psts, totals, rebuiltItems: rebuilt.c, rebuiltBytes: rebuilt.bytes, remainingFts: remaining.c, lastRun: log.length ? log[log.length - 1].finishedAt : null, ...pstRepairState.status() };
+  return { upn: m.upn, psts, totals, rebuiltItems: rebuilt.c, rebuiltBytes: rebuilt.bytes, remainingFts: remaining.c, lastRun: log.length ? log[log.length - 1].finishedAt : null, ...pstRepairState.status(), verifyRunning: pstVerifyState.status().running, verifyLines: pstVerifyState.status().lines };
 }));
 
 // Per-folder rebuild report: aggregates folderStats from the latest record of
@@ -277,19 +328,32 @@ app.get('/api/mailbox/:upn/pst-repair/report', wrap(async req => {
 const pstRepairState = {
   file: () => path.join(cfg.dataDir, 'pst-repair-job.json'),
   logFile: () => path.join(cfg.dataDir, 'pst-repair-run.log'),
+  progressFile: () => path.join(cfg.dataDir, 'pst-repair-progress.json'),
   read() { try { return JSON.parse(fs.readFileSync(this.file(), 'utf8')); } catch { return null; } },
   alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } },
-  status() {
-    const j = this.read();
-    if (!j || !j.pid) return { running: false, lastLine: null };
-    const running = this.alive(j.pid);
-    let lastLine = null;
+  tail(n = 60) {
     try {
       const lines = fs.readFileSync(this.logFile(), 'utf8').trim().split('\n').filter(Boolean);
-      lastLine = lines.length ? lines[lines.length - 1].slice(0, 300) : null;
-    } catch { }
-    return { running, lastLine, startedAt: j.startedAt, upn: j.upn };
+      return lines.slice(-n).map(l => l.slice(0, 300));
+    } catch { return []; }
+  },
+  status() {
+    const j = this.read();
+    let progress = null;
+    try { progress = JSON.parse(fs.readFileSync(this.progressFile(), 'utf8')); } catch { }
+    if (!j || !j.pid) return { running: false, lastLine: null, lines: [], progress };
+    const running = this.alive(j.pid);
+    const lines = this.tail();
+    return { running, lastLine: lines.length ? lines[lines.length - 1] : null, lines, startedAt: j.startedAt, upn: j.upn, file: j.file || null, progress };
   }
+};
+const spawnPstScript = (script, jobFile, logFile, args) => {
+  const out = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, [path.join(__dirname, 'scripts', script), ...args], { stdio: ['ignore', out, out], detached: true });
+  child.unref();
+  fs.writeFileSync(jobFile, JSON.stringify({ pid: child.pid, startedAt: new Date().toISOString(), args }));
+  fs.closeSync(out);
+  return child;
 };
 app.post('/api/mailbox/:upn/pst-repair', wrap(async req => {
   const m = store.getMailbox(req.params.upn);
@@ -298,16 +362,61 @@ app.post('/api/mailbox/:upn/pst-repair', wrap(async req => {
   const pstDir = path.join(__dirname, 'pst-import', m.upn.split('@')[0]);
   if (!fs.existsSync(pstDir) || !fs.readdirSync(pstDir).some(f => f.toLowerCase().endsWith('.pst')))
     throw new Error(`No PSTs found in pst-import/${m.upn.split('@')[0]} — drop the PST files there first`);
-  const out = fs.openSync(pstRepairState.logFile(), 'w');
-  const child = spawn(process.execPath, [path.join(__dirname, 'scripts', 'pst-repair.js'), m.upn, pstDir],
-    { stdio: ['ignore', out, out], detached: true });
-  child.unref();
-  const startedAt = new Date().toISOString();
-  fs.writeFileSync(pstRepairState.file(), JSON.stringify({ pid: child.pid, upn: m.upn, startedAt }));
-  fs.closeSync(out);
-  log('info', m.upn, `PST recovery started from pst-import/${m.upn.split('@')[0]} (pid ${child.pid})`);
+  const file = req.body && req.body.file;
+  const args = [m.upn, pstDir];
+  if (file) {
+    if (!fs.existsSync(path.join(pstDir, file))) throw new Error(`PST not found: ${file}`);
+    args.push(`--file=${file}`);
+  }
+  const child = spawnPstScript('pst-repair.js', pstRepairState.file(), pstRepairState.logFile(), args);
+  fs.writeFileSync(pstRepairState.file(), JSON.stringify({ pid: child.pid, upn: m.upn, startedAt: new Date().toISOString(), file: file || null }));
+  log('info', m.upn, `PST recovery started ${file ? `for ${file} ` : ''}from pst-import/${m.upn.split('@')[0]} (pid ${child.pid})`);
   bus.emit('job', { kind: 'pst-repair', upn: m.upn, status: 'running' });
-  return { ok: true, startedAt, pid: child.pid };
+  return { ok: true, pid: child.pid };
+}));
+app.post('/api/mailbox/:upn/pst-repair/stop', wrap(async req => {
+  const j = pstRepairState.read();
+  if (!j || !j.pid || !pstRepairState.alive(j.pid)) { const e = new Error('PST recovery is not running'); e.status = 409; throw e; }
+  try { process.kill(j.pid); } catch { }
+  log('info', req.params.upn, `PST recovery stopped (pid ${j.pid})`);
+  return { ok: true };
+}));
+// PST verification job (scripts/pst-verify.js): per-file ok/failed + remark,
+// results land in data/pst-verify-log.json (failed files get retry:true).
+const pstVerifyState = {
+  file: () => path.join(cfg.dataDir, 'pst-verify-job.json'),
+  logFile: () => path.join(cfg.dataDir, 'pst-verify-run.log'),
+  resultFile: () => path.join(cfg.dataDir, 'pst-verify-log.json'),
+  read() { try { return JSON.parse(fs.readFileSync(this.file(), 'utf8')); } catch { return null; } },
+  results() {
+    let log = [];
+    try { log = JSON.parse(fs.readFileSync(this.resultFile(), 'utf8')); } catch { }
+    const latest = new Map();
+    for (const r of log) latest.set(r.file, r);
+    return latest;
+  },
+  status() {
+    const j = this.read();
+    const running = !!(j && j.pid && pstRepairState.alive(j.pid));
+    let lines = [];
+    try { lines = fs.readFileSync(this.logFile(), 'utf8').trim().split('\n').filter(Boolean).slice(-60).map(l => l.slice(0, 300)); } catch { }
+    return { running, lines, startedAt: j?.startedAt || null };
+  }
+};
+app.post('/api/mailbox/:upn/pst-verify', wrap(async req => {
+  const m = store.getMailbox(req.params.upn);
+  if (!m) throw new Error('Mailbox not found');
+  if (pstVerifyState.status().running) { const e = new Error('PST verify already running'); e.status = 409; throw e; }
+  const pstDir = path.join(__dirname, 'pst-import', m.upn.split('@')[0]);
+  const file = req.body && req.body.file;
+  const args = [m.upn, pstDir];
+  if (file) {
+    if (!fs.existsSync(path.join(pstDir, file))) throw new Error(`PST not found: ${file}`);
+    args.push(`--file=${file}`);
+  }
+  const child = spawnPstScript('pst-verify.js', pstVerifyState.file(), pstVerifyState.logFile(), args);
+  log('info', m.upn, `PST verify started ${file ? `for ${file} ` : ''}(pid ${child.pid})`);
+  return { ok: true, pid: child.pid };
 }));
 
 const guardIdle = upn => {
@@ -501,6 +610,19 @@ app.get('/api/mailbox/:upn/attachment', async (req, res) => {
   }
 });
 app.post('/api/discover', wrap(() => engine.discover()));
+// Per-mailbox backup master switch: paused mailboxes are refused by
+// /api/backup and skipped by the auto-resume sweep; pausing also gracefully
+// stops this mailbox's currently running backup scopes.
+app.post('/api/mailbox/:upn/backup-pause', wrap(req => {
+  const m = store.getMailbox(req.params.upn);
+  if (!m) throw new Error('Mailbox not found');
+  const paused = !!(req.body && req.body.paused);
+  store.patchMailboxFields(m.upn, { backupPaused: paused ? 1 : 0 });
+  if (paused) { engine.stopScope('primary', m.upn); engine.stopScope('archive', m.upn); }
+  log('info', m.upn, paused ? 'ALL backups paused for this mailbox (master switch) — auto-resume will skip it' : 'backups resumed for this mailbox');
+  return { ok: true, paused };
+}));
+
 app.post('/api/backup', wrap(req => {
   // Backups and PST exports are designed to run concurrently: the engine
   // publishes item files atomically (tmp + rename) and the exporter only
@@ -522,17 +644,22 @@ app.post('/api/backup', wrap(req => {
   if (provider != null && provider !== 'ews' && provider !== 'graphie') { const e = new Error('invalid provider: only "ews" and "graphie" are supported'); e.status = 400; throw e; }
   const one = req.body && req.body.upn, many = req.body && req.body.upns;
   if ((one && !isValidUpn(one)) || (Array.isArray(many) && many.some(u => !isValidUpn(u)))) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
+  // Per-mailbox master switch: paused mailboxes can't be backed up.
+  const isPaused = u => { const m = store.getMailbox(u); return !!(m && m.backupPaused); };
+  if (one && isPaused(one)) { const e = new Error('backups are paused for this mailbox (master switch is on)'); e.status = 409; throw e; }
+  const upns = Array.isArray(many) ? many.filter(u => !isPaused(u)) : many;
+  if (Array.isArray(many) && !upns.length) { const e = new Error('all selected mailboxes have backups paused (master switch is on)'); e.status = 409; throw e; }
   autoResumeSuppressed = false; // manual start re-arms the auto-resume sweep
   // Engine busy → queue as a background task instead of failing; it starts
   // automatically when the current job finishes.
   if (engine.running || fixTasks.some(fixActive)) {
-    const t = { id: ++fixSeq, kind: 'backup', upn: one || null, upns: many || null, scope: scope || null, provider: provider || null, status: 'queued', queuedAt: new Date().toISOString() };
+    const t = { id: ++fixSeq, kind: 'backup', upn: one || null, upns: upns || null, scope: scope || null, provider: provider || null, status: 'queued', queuedAt: new Date().toISOString() };
     fixTasks.push(t);
     log('info', one || '', `backup queued behind the running job${scope ? ` (${scope} only)` : ''}`);
     pumpFixTasks();
     return { ok: true, queued: true, task: t };
   }
-  return engine.runBackup(one, many, { scope, provider });
+  return engine.runBackup(one, upns, { scope, provider });
 }));
 let sizesRunning = false;
 let sizesStop = false;
@@ -764,6 +891,10 @@ app.post('/api/scan', wrap(async req => {
             try {
               scanLive[u] = { scope: 'archive', folders: 0 };
               await ews.folderTree(u, onProgress, aborter.signal, upsert(u, 'archive'));
+              // The EWS walk upserts EWS-namespace rows — fold them into the IE
+              // tree immediately or the UI shows a duplicated archive hierarchy.
+              const mg = store.mergeArchiveNamespaces(u);
+              if (mg.movedItems || mg.dropped) log('info', u, `EWS archive rows merged into the archive tree (${mg.movedItems} items, ${mg.dropped} folders)`);
             } catch (e2) {
               if (e2.aborted || e2.name === 'AbortError') throw e2;
               log('warn', u, 'archive count scan skipped: ' + String(e2.fault || e2.message || e2));
@@ -879,9 +1010,12 @@ async function pumpFixTasks() {
         }
         t.startedAt = new Date().toISOString();
         if (t.kind === 'backup') {
+          const taskUpns = t.upn ? [t.upn] : (t.upns || []);
+          const active = taskUpns.filter(u => { const m = store.getMailbox(u); return !(m && m.backupPaused); });
+          if (!active.length) { t.status = 'done'; t.detail = 'skipped — backups paused (master switch)'; continue; }
           t.status = 'backup';
           log('info', t.upn || '', 'queued backup started');
-          await engine.runBackup(t.upn, t.upns, { scope: t.scope || undefined, provider: t.provider || undefined });
+          await engine.runBackup(t.upn && active.length ? t.upn : null, t.upn ? null : active, { scope: t.scope || undefined, provider: t.provider || undefined });
         } else if (t.kind === 'verify') {
           t.status = 'verify';
           log('info', t.upn || '', 'queued verify started');
@@ -985,7 +1119,7 @@ setInterval(() => {
 app.post('/api/copy', wrap(req => {
   // Copy reads local files and writes to the target mailbox — safe to run
   // alongside a backup (per-call Graph abort signals keep Stop working).
-  if (pst.running || copyEngine.running || dedupeEngine.running) { const e = new Error('another job is running — stop it first'); e.status = 409; throw e; }
+  if (pst.running || copyEngine.running || dedupeEngine.running || copyEmailEngine.running || moveEmailEngine.running) { const e = new Error('another job is running — stop it first'); e.status = 409; throw e; }
   const { srcUpn, dstUpn, folderKeys, mode, prefix } = req.body || {};
   if (!isValidUpn(srcUpn) || !isValidUpn(dstUpn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
   if (srcUpn === dstUpn) { const e = new Error('source and target mailbox must differ'); e.status = 400; throw e; }
@@ -1002,6 +1136,248 @@ app.get('/api/copy/:jobId', wrap(async req => {
     || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
   if (!job) { const e = new Error('job not found'); e.status = 404; throw e; }
   return { job, report: store.copyReport(jobId), running: copyEngine.running };
+}));
+
+// ---------- Copy email: local backup folders → live mailbox or local backup ----------
+// Copy-only bulk copy with folder-structure recreation and destination-side
+// duplicate skipping. One run per source mailbox; resumable by re-running
+// (everything already at the destination is skipped).
+app.post('/api/copy-email', wrap(req => {
+  // move-email runs in parallel on purpose — see moveEmailGuard.
+  if (pst.running || copyEngine.running || compareRunning) {
+    const e = new Error('another job is running — stop it first'); e.status = 409; throw e;
+  }
+  const { srcUpn, target, dst } = req.body || {};
+  const folderKeys = Array.isArray(req.body.folderKeys) ? req.body.folderKeys : [];
+  const items = Array.isArray(req.body.items) ? req.body.items : null;
+  const srcMode = req.body.srcMode === 'live' ? 'live' : 'store';
+  const srcFolders = req.body.srcFolders;
+  const dstUpn = req.body.dstUpn || srcUpn;
+  if (!isValidUpn(srcUpn) || !isValidUpn(dstUpn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
+  if (!store.getMailbox(srcUpn)) { const e = new Error('source mailbox not found'); e.status = 404; throw e; }
+  if (target !== 'live' && target !== 'local') { const e = new Error('target must be live or local'); e.status = 400; throw e; }
+  if (folderKeys.some(k => typeof k !== 'string')) { const e = new Error('folderKeys must be a string array'); e.status = 400; throw e; }
+  // Item-level picks: flat copy of individual emails, no structure recreation.
+  if (items && (items.length > 2000 || items.some(k => typeof k !== 'string' || !/^[^:]+:[^:]+:.+/.test(k)))) {
+    const e = new Error('items must be ≤2000 keys of the form scope:folderId:itemId'); e.status = 400; throw e;
+  }
+  if (!folderKeys.length && !(items && items.length)) {
+    const e = new Error('folderKeys or items required'); e.status = 400; throw e;
+  }
+  // Live source: the client ships the selected live tree rows (plus ancestors)
+  // so the engine needs no server-side live tree.
+  if (srcMode === 'live') {
+    if (!Array.isArray(srcFolders) || !srcFolders.length || srcFolders.length > 500
+      || srcFolders.some(f => !f || typeof f.id !== 'string' || !f.id || typeof f.name !== 'string' || typeof f.path !== 'string' || (f.parentId != null && typeof f.parentId !== 'string'))) {
+      const e = new Error('srcMode live needs srcFolders (≤500 rows of {id,parentId,name,path})'); e.status = 400; throw e;
+    }
+    const ids = new Set(srcFolders.map(f => 'live:' + f.id));
+    if (folderKeys.some(k => !ids.has(k))) { const e = new Error('folderKeys must be live:<id> of a supplied srcFolders row'); e.status = 400; throw e; }
+  }
+  if (!dst || typeof dst !== 'object') { const e = new Error('dst is required'); e.status = 400; throw e; }
+  if (target === 'live') {
+    // folderId null/omitted = recreate at the mailbox root (msgfolderroot).
+    if (dst.folderId != null && (typeof dst.folderId !== 'string' || !dst.folderId)) { const e = new Error('invalid dst.folderId (live folder id)'); e.status = 400; throw e; }
+  } else {
+    if (dst.scope !== 'primary' && dst.scope !== 'archive') { const e = new Error('dst.scope must be primary or archive'); e.status = 400; throw e; }
+    if (dst.folderId == null && (typeof dst.name !== 'string' || !dst.name.trim() || dst.name.length > 120 || dst.name.includes('/'))) {
+      const e = new Error('a new root folder needs dst.name (1–120 chars, no slashes)'); e.status = 400; throw e;
+    }
+    if (dst.folderId != null && typeof dst.folderId !== 'string') { const e = new Error('invalid dst.folderId'); e.status = 400; throw e; }
+  }
+  const dstLabel = typeof req.body.dstLabel === 'string' && req.body.dstLabel.trim()
+    ? req.body.dstLabel.trim().slice(0, 160)
+    : target === 'live'
+      ? (dst.folderId || 'mailbox root')
+      : (dst.folderId ? ((store.getFolder(dstUpn, dst.scope, dst.folderId) || {}).path || String(dst.folderId)) : String(dst.name));
+  // Human source label for queue rows + job detail: topmost-picked folder
+  // paths (drop keys whose parent is also picked), capped at ~200 chars.
+  const srcByKey = new Map((srcMode === 'live' ? srcFolders.map(f => ({ scope: 'live', folderId: f.id, parentId: f.parentId || null, path: f.path })) : store.listFolders(srcUpn))
+    .map(f => [f.scope + ':' + f.folderId, f]));
+  const joinPaths = paths => {
+    let out = '', used = 0;
+    for (const p of paths) {
+      const next = out ? out + ', ' + p : p;
+      if (next.length > 200) break;
+      out = next; used++;
+    }
+    return out + (used < paths.length ? `, +${paths.length - used} more` : '');
+  };
+  const topmostPaths = keys => {
+    const picked = new Set(keys.filter(k => srcByKey.has(k)));
+    const top = [...picked].filter(k => {
+      const pid = srcByKey.get(k).parentId;
+      return !(pid && picked.has(k.slice(0, k.indexOf(':') + 1) + pid));
+    });
+    return top.map(k => srcByKey.get(k).path || srcByKey.get(k).name);
+  };
+  let srcLabel = null;
+  if (items && items.length) {
+    const fks = [...new Set(items.map(k => { const i1 = k.indexOf(':'); const i2 = k.indexOf(':', i1 + 1); return i2 > 0 ? k.slice(0, i2) : k; }))];
+    const paths = fks.map(k => { const r = srcByKey.get(k); return r ? (r.path || r.name) : null; }).filter(Boolean);
+    if (paths.length) srcLabel = `${items.length} emails from: ${joinPaths(paths)}`;
+  } else {
+    const paths = topmostPaths(folderKeys);
+    if (paths.length) srcLabel = joinPaths(paths);
+  }
+  // Busy → enqueue instead of 409: the engine pops the queue when a run ends.
+  if (copyEmailEngine.running) {
+    const q = store.copyQueueAdd(srcUpn, dstUpn, target, { folderKeys, items, dst, dstLabel, srcLabel, srcMode, ...(srcMode === 'live' ? { srcFolders } : {}) });
+    log('info', srcUpn, `copy email: queued behind the running job (position ${q.position})`);
+    return { queued: true, position: q.position, jobId: null };
+  }
+  return copyEmailEngine.start({ srcUpn, dstUpn, target, folderKeys, dst, items, srcMode, srcFolders: srcMode === 'live' ? srcFolders : null, dstLabel, srcLabel });
+}));
+// Re-check/re-copy just the failed items of a finished copy-email job.
+app.post('/api/copy-email/retry', wrap(req => {
+  if (pst.running || copyEngine.running || compareRunning) {
+    const e = new Error('another job is running — stop it first'); e.status = 409; throw e;
+  }
+  const jobId = req.body && req.body.jobId;
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  if (!job || job.kind !== 'copy-email') { const e = new Error('copy-email job not found'); e.status = 404; throw e; }
+  let d = null;
+  try { d = JSON.parse(job.detail || '{}'); } catch { }
+  const failedKeys = d && Array.isArray(d.failedKeys) ? d.failedKeys.filter(k => typeof k === 'string') : [];
+  if (!failedKeys.length) { const e = new Error('this job has no failed items recorded'); e.status = 400; throw e; }
+  if (!d.srcUpn || !d.target || !Array.isArray(d.folderKeys) || !d.dst) { const e = new Error('job detail is incomplete — cannot retry'); e.status = 400; throw e; }
+  const dstUpn = d.dstUpn || d.srcUpn;
+  const retryItems = Array.isArray(d.items) ? d.items : null;
+  const retryLive = d.srcMode === 'live' && Array.isArray(d.srcFolders) ? { srcMode: 'live', srcFolders: d.srcFolders } : {};
+  // Busy → enqueue the retry like any other copy job.
+  if (copyEmailEngine.running) {
+    const q = store.copyQueueAdd(d.srcUpn, dstUpn, d.target, { folderKeys: d.folderKeys, items: retryItems, dst: d.dst, dstLabel: d.dstLabel, srcLabel: d.srcLabel, ...retryLive, failedKeys, retryOf: jobId });
+    log('info', d.srcUpn, `copy email: retry of job ${jobId} queued (position ${q.position})`);
+    return { queued: true, position: q.position, jobId: null };
+  }
+  return copyEmailEngine.start({
+    srcUpn: d.srcUpn, dstUpn, target: d.target,
+    folderKeys: d.folderKeys, dst: d.dst, items: retryItems, ...retryLive,
+    onlyItems: new Set(failedKeys), retryOf: jobId
+  });
+}));
+// Copy queue: pending copy-email jobs (they become job rows only when started).
+app.get('/api/copy-email/queue', wrap(() => ({ queue: copyQueueRows() })));
+app.delete('/api/copy-email/queue/:id', wrap(req => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || !store.copyQueueRemove(id)) { const e = new Error('queued copy not found'); e.status = 404; throw e; }
+  return { ok: true };
+}));
+// History for the copy page: /api/status's jobs array is capped at 20 rows of
+// ALL kinds (sweep jobs push copy-email rows out), so the panel reads this
+// kind-filtered list instead. Registered before /:jobId so 'jobs' isn't parsed
+// as a job id.
+app.get('/api/copy-email/jobs', wrap(req => {
+  const upn = req.query.upn ? String(req.query.upn) : null;
+  if (upn && !isValidUpn(upn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
+  return { jobs: store.listJobsByKind('copy-email', upn) };
+}));
+app.get('/api/copy-email/:jobId', wrap(async req => {
+  const jobId = parseInt(req.params.jobId, 10);
+  if (!Number.isFinite(jobId)) { const e = new Error('invalid job id'); e.status = 400; throw e; }
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  if (!job) { const e = new Error('job not found'); e.status = 404; throw e; }
+  let srcUpn = null;
+  try { srcUpn = JSON.parse(job.detail || '{}').srcUpn || null; } catch { }
+  return { job, running: srcUpn ? copyEmailEngine.isRunning(srcUpn) : copyEmailEngine.running };
+}));
+
+// ---------- Move email: local backup or live folders → live/local, source removed ----------
+// Same flow as copy-email plus verified-move semantics: the destination copy is
+// uploaded & verified BEFORE the source is retired (graveyard for local,
+// Deleted Items for live). One run per source mailbox; conflicts with
+// pst/copy/compare jobs — copy-email runs in parallel on purpose (both
+// engines verify + skip duplicates at the destination independently).
+const moveEmailGuard = () => {
+  if (moveEmailEngine.running || moveEmailEngine.undoRunning) {
+    const e = new Error('a move-email job is already running — one mailbox at a time; stop it first'); e.status = 409; throw e;
+  }
+  if (pst.running || copyEngine.running || compareRunning) {
+    const e = new Error('another job is running — stop it first'); e.status = 409; throw e;
+  }
+};
+const validateMoveEmailBody = req => {
+  const { srcUpn, srcType, target, folderKeys, dst } = req.body || {};
+  const dstUpn = req.body.dstUpn || srcUpn;
+  if (!isValidUpn(srcUpn) || !isValidUpn(dstUpn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
+  if (srcType !== 'local' && srcType !== 'live') { const e = new Error('srcType must be local or live'); e.status = 400; throw e; }
+  if (srcType === 'live' && target !== 'live') { const e = new Error('live sources can only move to a live mailbox (target must be live)'); e.status = 400; throw e; }
+  if (target !== 'live' && target !== 'local') { const e = new Error('target must be live or local'); e.status = 400; throw e; }
+  if (!Array.isArray(folderKeys) || !folderKeys.length || folderKeys.some(k => typeof k !== 'string')) {
+    const e = new Error('folderKeys must be a non-empty string array'); e.status = 400; throw e;
+  }
+  if (srcType === 'local' && !store.getMailbox(srcUpn)) { const e = new Error('source mailbox not found'); e.status = 404; throw e; }
+  if (!dst || typeof dst !== 'object') { const e = new Error('dst is required'); e.status = 400; throw e; }
+  if (target === 'live') {
+    if (dst.folderId != null && (typeof dst.folderId !== 'string' || !dst.folderId)) { const e = new Error('invalid dst.folderId (live folder id)'); e.status = 400; throw e; }
+  } else {
+    if (dst.scope !== 'primary' && dst.scope !== 'archive') { const e = new Error('dst.scope must be primary or archive'); e.status = 400; throw e; }
+    if (dst.folderId == null && (typeof dst.name !== 'string' || !dst.name.trim() || dst.name.length > 120 || dst.name.includes('/'))) {
+      const e = new Error('a new root folder needs dst.name (1–120 chars, no slashes)'); e.status = 400; throw e;
+    }
+    if (dst.folderId != null && typeof dst.folderId !== 'string') { const e = new Error('invalid dst.folderId'); e.status = 400; throw e; }
+  }
+  return { srcUpn, srcType, dstUpn, target, folderKeys, dst, force: !!(req.body && req.body.force) };
+};
+app.post('/api/move-email', wrap(req => {
+  moveEmailGuard();
+  return moveEmailEngine.start(validateMoveEmailBody(req));
+}));
+// Re-move just the failed items of a finished move-email job.
+app.post('/api/move-email/retry', wrap(req => {
+  moveEmailGuard();
+  const jobId = req.body && req.body.jobId;
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  if (!job || job.kind !== 'move-email') { const e = new Error('move-email job not found'); e.status = 404; throw e; }
+  let d = null;
+  try { d = JSON.parse(job.detail || '{}'); } catch { }
+  const failedKeys = d && Array.isArray(d.failedKeys) ? d.failedKeys.filter(k => typeof k === 'string') : [];
+  if (!failedKeys.length) { const e = new Error('this job has no failed items recorded'); e.status = 400; throw e; }
+  if (!d.srcUpn || !d.target || !Array.isArray(d.folderKeys) || !d.dst) { const e = new Error('job detail is incomplete — cannot retry'); e.status = 400; throw e; }
+  return moveEmailEngine.start({
+    srcUpn: d.srcUpn, srcType: d.srcType || 'local', dstUpn: d.dstUpn || d.srcUpn, target: d.target,
+    folderKeys: d.folderKeys, dst: d.dst, onlyItems: new Set(failedKeys), retryOf: jobId
+  });
+}));
+app.get('/api/move-email/:jobId', wrap(async req => {
+  const jobId = parseInt(req.params.jobId, 10);
+  if (!Number.isFinite(jobId)) { const e = new Error('invalid job id'); e.status = 400; throw e; }
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  if (!job) { const e = new Error('job not found'); e.status = 404; throw e; }
+  let srcUpn = null;
+  try { srcUpn = JSON.parse(job.detail || '{}').srcUpn || null; } catch { }
+  return { job, running: srcUpn ? moveEmailEngine.isRunning(srcUpn) : moveEmailEngine.running };
+}));
+
+// Move-email undo: reverses the recorded per-item plan of a move-email job
+// (destination copies → Deleted Items/graveyard, sources restored). One undo at
+// a time, guarded like a move-email start.
+app.get('/api/move-email/undo/:jobId', wrap(async req => {
+  const jobId = parseInt(req.params.jobId, 10);
+  if (!Number.isFinite(jobId)) { const e = new Error('invalid job id'); e.status = 400; throw e; }
+  const rows = store.moveEmailPlanAll(jobId);
+  if (!rows.length) return { available: false, items: 0 };
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  let label = null;
+  try { const d = JSON.parse((job && job.detail) || '{}'); label = `${d.srcType === 'live' ? 'live' : 'local'} → ${d.target} ${d.dstUpn || ''}${d.dstLabel ? ` "${d.dstLabel}"` : ''}`; } catch { }
+  return { available: true, items: rows.length, label };
+}));
+app.post('/api/move-email/undo', wrap(req => {
+  // copy-email runs in parallel on purpose (same rule as move-email itself).
+  if (moveEmailEngine.running || moveEmailEngine.undoRunning
+    || pst.running || copyEngine.running || compareRunning) {
+    const e = new Error('another job is running — stop it first'); e.status = 409; throw e;
+  }
+  const jobId = req.body && req.body.jobId;
+  const job = store.listJobs().find(j => j.id === jobId)
+    || store.db.prepare('SELECT * FROM jobs WHERE id=?').get(jobId);
+  if (!job || job.kind !== 'move-email') { const e = new Error('move-email job not found'); e.status = 404; throw e; }
+  return moveEmailEngine.undo(jobId);
 }));
 
 // ---------- Compare: live mailbox browse (read-only) + per-item transfer ----------
@@ -1082,36 +1458,14 @@ app.get('/api/live/:upn/attachment', async (req, res) => {
 });
 
 // Synchronous per-item transfer between the local store and a live mailbox.
-// direction 'toLive': local .eml.gz → Graph MIME import into dstFolderId.
+// direction 'toLive': local .eml.gz → EWS CreateItem into dstFolderId.
 // direction 'toLocal': live message → gz file in the local store (scope dstScope).
 // Every successful item is recorded in `compareUndo` so the action can be reversed.
 let compareUndo = null; // { label, at, direction, mode, srcUpn, dstUpn, dstScope, records, foldersCreated }
 // Message-ID / internetMessageId normalization for transfer dedupe keys.
 const normMsgId = s => { const v = String(s || '').replace(/[<>]/g, '').trim().toLowerCase(); return v || null; };
-// Fuzzy "same email" matcher across API channels: Graph/EWS/Graph-IE/PST copies
-// of one physical message get different ids, and receivedAt/size drift by a few
-// seconds/bytes (Exchange normalizes MIME). Exact subject + receivedAt within
-// 2 min + size within 10% (when known on both sides) counts as a duplicate.
-const fuzzyDupes = () => {
-  const list = [];
-  const norm = s => String(s || '').trim().toLowerCase();
-  return {
-    add(subject, receivedAt, size) {
-      list.push({ s: norm(subject), t: receivedAt ? (+new Date(receivedAt) || null) : null, z: size || null });
-    },
-    has(subject, receivedAt, size) {
-      const s = norm(subject); if (!s) return false;
-      const t = receivedAt ? (+new Date(receivedAt) || null) : null;
-      for (const e of list) {
-        if (e.s !== s) continue;
-        if (e.t && t && Math.abs(e.t - t) > 120000) continue;
-        if (e.z && size && Math.abs(e.z - size) / Math.max(e.z, size) > 0.10) continue;
-        return true;
-      }
-      return false;
-    }
-  };
-};
+// Fuzzy "same email" matcher (subject + receivedAt ±2 min + size ±10% when known)
+// is shared with the copy-email engine — imported from lib/dedupe.js.
 // One compare transfer at a time, with cooperative cancellation (POST /api/stop/compare).
 let compareRunning = false, compareStop = false;
 // Live progress of the running (or last finished) compare action — kept after
@@ -1119,7 +1473,7 @@ let compareRunning = false, compareStop = false;
 let compareProg = null; // { running, kind, label, src, dst, startedAt, foldersDone, foldersTotal, itemsDone, itemsTotal, done, skipped, failed, currentFolder, stopped }
 const sideName = (upn, name, tag) => (tag ? `${upn} (${tag})` : upn) + (name ? ` · ${name}` : '');
 const compareGuard = fn => wrap(async req => {
-  if (copyEngine.running) { const e = new Error('a copy job is running — stop it first'); e.status = 409; throw e; }
+  if (copyEngine.running || copyEmailEngine.running || moveEmailEngine.running) { const e = new Error('a copy job is running — stop it first'); e.status = 409; throw e; }
   if (compareRunning) { const e = new Error('a compare transfer is already running'); e.status = 409; throw e; }
   compareRunning = true; compareStop = false;
   try { return await fn(req); } finally {
@@ -1167,6 +1521,10 @@ app.post('/api/compare/transfer', compareGuard(async req => {
   };
   const syncProg = () => Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed });
   if (direction === 'toLive') {
+    // Uploads go through EWS CreateItem (Graph MIME import creates drafts with
+    // the import date and cannot be fixed via PATCH); convert the REST folder id.
+    const dstEwsId = (await ews.convertRestIds(dstUpn, [dstFolderId], graph)).get(dstFolderId);
+    if (!dstEwsId) { const e = new Error('destination folder id conversion failed'); e.status = 502; throw e; }
     // Dedupe against the destination folder: Message-ID set + subject|receivedAt keys.
     const destMsgIds = new Set(), destKeys = new Set(), destFuzzy = fuzzyDupes();
     for (const m of await graph.listMessages(dstUpn, dstFolderId)) {
@@ -1195,14 +1553,12 @@ app.post('/api/compare/transfer', compareGuard(async req => {
           skipped++; results.push({ ref, ok: true, skipped: true }); syncProg();
           continue;
         }
-        const created = await graph.postMessageMime(dstUpn, dstFolderId, mime);
-        if (!created || !created.id) throw new Error('upload failed');
-        const meta = await graph.getMessageMeta(dstUpn, created.id);
-        if (!meta) throw new Error('upload verification failed');
+        const ewsItemId = await ews.uploadMessage(dstUpn, dstEwsId, mime, hdr.receivedAt || item.receivedAt);
+        if (!ewsItemId) throw new Error('upload failed');
         if (msgId) destMsgIds.add(msgId);
         destKeys.add(key);
         destFuzzy.add(hdr.subject != null ? hdr.subject : item.subject, hdr.receivedAt || item.receivedAt, item.size);
-        const rec = { createdId: created.id };
+        const rec = { createdId: ewsItemId };
         if (mode === 'move') {
           rec.itemRow = item;
           rec.scope = it.scope; rec.folderId = it.folderId; rec.itemId = it.itemId; rec.fileId = item.fileId;
@@ -1337,6 +1693,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
     }).sort((a, b) => a.path.split('/').length - b.path.split('/').length);
     const folderMap = new Map(rows.map(f => [f.folderId, f]));
     const destIds = new Map(); // local srcFolderId -> live dest folder id
+    const ewsFolderIds = new Map(); // live REST folder id -> EWS id
     compareProg = {
       running: true, kind: 'folder', label: `Folder copy "${srcFolder.name}"`,
       src: sideName(srcUpn, srcFolder.name, srcFolder.scope === 'archive' ? 'archive' : 'primary'), dst: sideName(dstUpn, req.body.dstName || (dstFolderId ? '' : 'mailbox root'), 'live'),
@@ -1354,6 +1711,14 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
         const destLiveId = ensured.id;
         if (ensured.created) foldersCreated.unshift(destLiveId);
         destIds.set(f.folderId, destLiveId);
+        // Uploads go through EWS (Graph MIME import creates drafts); cache the
+        // REST→EWS folder id conversion per destination folder.
+        let destEwsId = ewsFolderIds.get(destLiveId);
+        if (!destEwsId) {
+          destEwsId = (await ews.convertRestIds(dstUpn, [destLiveId], graph)).get(destLiveId);
+          if (!destEwsId) throw new Error('destination folder id conversion failed');
+          ewsFolderIds.set(destLiveId, destEwsId);
+        }
         folders++;
         compareProg.currentFolder = f.name; compareProg.foldersDone = folders;
         const destMsgIds = new Set(), destKeys = new Set(), destFuzzy = fuzzyDupes();
@@ -1373,14 +1738,12 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
             const key = itemKey(hdr.subject != null ? hdr.subject : item.subject, hdr.receivedAt || item.receivedAt);
             if ((msgId && destMsgIds.has(msgId)) || destKeys.has(key)
               || destFuzzy.has(hdr.subject != null ? hdr.subject : item.subject, hdr.receivedAt || item.receivedAt, item.size)) { skipped++; syncProg(); continue; }
-            const created = await graph.postMessageMime(dstUpn, destLiveId, mime);
-            if (!created || !created.id) throw new Error('upload failed');
-            const meta = await graph.getMessageMeta(dstUpn, created.id);
-            if (!meta) throw new Error('upload verification failed');
+            const ewsItemId = await ews.uploadMessage(dstUpn, destEwsId, mime, hdr.receivedAt || item.receivedAt);
+            if (!ewsItemId) throw new Error('upload failed');
             if (msgId) destMsgIds.add(msgId);
             destKeys.add(key);
             destFuzzy.add(hdr.subject != null ? hdr.subject : item.subject, hdr.receivedAt || item.receivedAt, item.size);
-            done++; records.push({ createdId: created.id }); syncProg();
+            done++; records.push({ createdId: ewsItemId }); syncProg();
           } catch (e) { noteErr(e); }
         }
       } catch (e) { noteErr(e); }
@@ -1546,8 +1909,9 @@ app.post('/api/compare/undo', compareGuard(async req => {
     if (compareStop) break;
     try {
       if (u.direction === 'toLive') {
-        // Reverse the upload: the created live copy goes to Deleted Items.
-        await graph.moveMessage(u.dstUpn, rec.createdId, 'deleteditems');
+        // Reverse the upload: the created live copy (tracked by its EWS id —
+        // ConvertId to RestId is tenant-blocked) goes to Deleted Items via EWS.
+        await ews.moveToDeletedItems(u.dstUpn, rec.createdId);
         if (rec.graveyardPath) {
           // Reverse a move: bring the local file + row back.
           const folderRow = store.getFolder(u.srcUpn, rec.scope, rec.folderId);
@@ -1649,6 +2013,8 @@ app.post('/api/stop', wrap(req => {
   pstPending = null;
   copyEngine.stop();
   dedupeEngine.stop();
+  copyEmailEngine.stop();
+  moveEmailEngine.stop();
   exoExport.stop();
   compareStop = true;
   sizesStop = true;
@@ -1700,6 +2066,26 @@ app.post('/api/stop/scan', wrap(() => {
 app.post('/api/stop/copy', wrap(() => {
   if (!copyEngine.running) { const e = new Error('no copy job is running'); e.status = 409; throw e; }
   copyEngine.stop();
+  return { ok: true };
+}));
+app.post('/api/stop/copy-email', wrap(req => {
+  const upn = req.body && req.body.upn;
+  if (upn) {
+    if (!copyEmailEngine.stop(upn)) { const e = new Error('no copy-email job is running for this mailbox'); e.status = 409; throw e; }
+    return { ok: true };
+  }
+  if (!copyEmailEngine.running) { const e = new Error('no copy-email job is running'); e.status = 409; throw e; }
+  copyEmailEngine.stop();
+  return { ok: true };
+}));
+app.post('/api/stop/move-email', wrap(req => {
+  const upn = req.body && req.body.upn;
+  if (upn) {
+    if (!moveEmailEngine.stop(upn)) { const e = new Error('no move-email job is running for this mailbox'); e.status = 409; throw e; }
+    return { ok: true };
+  }
+  if (!moveEmailEngine.running) { const e = new Error('no move-email job is running'); e.status = 409; throw e; }
+  moveEmailEngine.stop();
   return { ok: true };
 }));
 app.post('/api/stop/dedupe', wrap(req => {
@@ -1777,7 +2163,7 @@ function incompleteMailboxes(startupOnly) {
   const where = startupOnly
     ? `m.status = 'syncing'`
     : `m.status IN ('syncing', 'error') OR ${partialClause}`;
-  return store.db.prepare(`SELECT m.upn FROM mailboxes m WHERE ${where}`).all().map(r => r.upn);
+  return store.db.prepare(`SELECT m.upn FROM mailboxes m WHERE COALESCE(m.backupPaused, 0) = 0 AND (${where})`).all().map(r => r.upn);
 }
 function bumpRetry(upns) {
   for (const u of upns) {
@@ -1837,6 +2223,9 @@ if (cfg.autoResume !== false) {
   const sweepMin = cfg.autoResumeMinutes || 15;
   setInterval(() => resumeIncomplete('retry sweep', false), sweepMin * 60 * 1000).unref();
 }
+// Copy-email queue survives restarts — start the oldest queued copy (the
+// engine no-ops when a run is already active).
+setTimeout(() => { try { copyEmailEngine.pumpQueue(); } catch (e) { log('error', '', 'copy queue resume failed: ' + String(e.message || e)); } }, 6000);
 
 // New-mail check for completed mailboxes: a 'done' mailbox never auto-restarts
 // blindly. On a slower interval we re-enumerate its folders and only launch an

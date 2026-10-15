@@ -59,10 +59,36 @@ export default function TasksPanel({ status, logs }) {
 
   const cancel = id => del('/api/tasks/' + id).catch(e => dialog.notify('Cancel failed: ' + e.message, 'error'));
 
-  const empty = !jobs.length && !activeFix.length && !finishedFix.length && !exoExport.running;
+  const liveMove = (status && status.liveMove) || null;
+  const liveMoveActive = liveMove && liveMove.running;
+  const liveMovePct = liveMove && liveMove.itemsTotal ? Math.round(100 * liveMove.itemsDone / liveMove.itemsTotal) : 0;
+
+  const empty = !jobs.length && !activeFix.length && !finishedFix.length && !exoExport.running && !liveMoveActive;
   return (
     <div className="logbox taskspanel">
       {empty && <div className="log-empty">No running tasks — start a backup, verify, PST export or gap fix to see live progress here.</div>}
+
+      {liveMove && (liveMove.running || liveMove.state === 'done' || liveMove.state === 'error') && (
+        <div className="task-card">
+          <div className="task-head">
+            <b>Live folder move</b>
+            {liveMove.running
+              ? <span className="chip syncing"><i className="sdot" />running</span>
+              : <span className={`chip ${liveMove.state === 'done' ? 'done' : 'error'}`}>{liveMove.state}</span>}
+          </div>
+          <div className="muted task-detail">
+            {liveMove.src} → {liveMove.dst}
+          </div>
+          <div className="muted task-detail">
+            folder {liveMove.foldersDone}/{liveMove.foldersTotal}{liveMove.currentFolder ? ` — ${liveMove.currentFolder}` : ''} · {exfmt(liveMove.itemsDone)}/{exfmt(liveMove.itemsTotal)} emails
+          </div>
+          {liveMove.itemsTotal ? <div className="bar task-bar"><div className="fill" style={{ width: liveMovePct + '%' }} /></div> : null}
+          <div className="muted task-detail">
+            moved {exfmt(liveMove.moved)} · duplicates skipped {exfmt(liveMove.dupSkipped)}{liveMove.failed > 0 ? ` · ${liveMove.failed} failed` : ''}
+          </div>
+          {liveMove.error && <div className="bad-text">{liveMove.error}</div>}
+        </div>
+      )}
 
       {exoExport.running && (
         <div className="task-card">

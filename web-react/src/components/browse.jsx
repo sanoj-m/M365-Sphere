@@ -18,19 +18,29 @@ function buildTree(rows) {
   }
   const sortRec = ns => { ns.sort((a, b) => String(a.name).localeCompare(String(b.name))); ns.forEach(n => sortRec(n.children)); };
   sortRec(roots);
-  // Rollup backed-up bytes: totalBytes = own folder items + all descendants
-  const roll = ns => { for (const n of ns) { roll(n.children); n.totalBytes = (n.bytes || 0) + n.children.reduce((a, c) => a + c.totalBytes, 0); } };
+  // Rollup backed-up counts/bytes: totals = own folder items + all descendants
+  const roll = ns => {
+    for (const n of ns) {
+      roll(n.children);
+      n.totalBytes = (n.bytes || 0) + n.children.reduce((a, c) => a + c.totalBytes, 0);
+      n.totalBacked = (n.backedUp || 0) + n.children.reduce((a, c) => a + c.totalBacked, 0);
+      n.totalCount = (n.itemCount || 0) + n.children.reduce((a, c) => a + c.totalCount, 0);
+    }
+  };
   roll(roots);
   // The synthetic store root is not a real mailbox folder — show its children
   // at top level instead of wrapping the whole tree in one "Archive root" node.
   return roots.flatMap(r => r.name === 'Archive root' ? r.children : [r]);
 }
 
-function TreeNode({ node, depth, expanded, toggle, currentFolder, selectedId, onSelect, onMenu }) {
+function TreeNode({ node, depth, expanded, toggle, currentFolder, selectedId, onSelect, onMenu, isRoot }) {
   const open = expanded.has(node.folderId);
   const hasKids = node.children.length > 0;
   const isCurrent = currentFolder && (node.path === currentFolder);
   const complete = node.itemCount > 0 && node.backedUp >= node.itemCount;
+  // Root rows show subtree-combined counts/size with the folder's own muted in
+  // parens (only when descendants add anything); other rows show own values.
+  const rootCounts = isRoot && (node.totalBacked !== (node.backedUp || 0) || node.totalCount !== (node.itemCount || 0));
   const activate = () => { onSelect(node); if (hasKids) toggle(node.folderId); };
   const openMenuAtButton = e => {
     e.stopPropagation();
@@ -62,7 +72,9 @@ function TreeNode({ node, depth, expanded, toggle, currentFolder, selectedId, on
           <span className="tree-name">{node.name || '(root)'}</span>
         </span>
         {complete && <Check size={14} className="tree-done-icon" />}
-        <span className="tv-stats mono">{node.backedUp} / {node.itemCount}</span>
+        {rootCounts
+          ? <span className="tv-stats mono" title={`${node.totalBacked} / ${node.totalCount} including subfolders`}>{node.totalBacked} / {node.totalCount}</span>
+          : <span className="tv-stats mono">{node.backedUp} / {node.itemCount}</span>}
         <span className="tv-size mono muted" title={`Backed-up size of "${node.name || '(root)'}" including subfolders (raw message bytes)`}>{fmtBytes(node.totalBytes || 0)}</span>
         <button type="button" className="tree-menu-btn" aria-label={`Export options for ${node.name || '(root)'}`}
           onClick={openMenuAtButton}>⋯</button>
@@ -103,7 +115,7 @@ export function ScopeTree({ label, rows, currentFolder, selectedId, onSelect, on
       </div>
       <div className="tree">
         {roots.map(n => <TreeNode key={n.folderId} node={n} depth={0} expanded={expanded} toggle={toggle}
-          currentFolder={currentFolder} selectedId={selectedId} onSelect={onSelect} onMenu={onMenu} />)}
+          currentFolder={currentFolder} selectedId={selectedId} onSelect={onSelect} onMenu={onMenu} isRoot />)}
       </div>
     </div>
   );
@@ -253,6 +265,14 @@ export function ScopePanel({ upn, scope, label, rows, live, scanLive, mailbox, a
   const [folder, setFolder] = useState(null);
   const [item, setItem] = useState(null);
   const [menu, setMenu] = useState(null); // { x, y, node }
+  // Deep link: ?mailbox=<upn>&scope=<scope>&folderId=<id> pre-selects a folder.
+  useEffect(() => {
+    if (folder) return;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get('scope') !== scope || !p.get('folderId')) return;
+    const hit = rows.find(r => r.folderId === p.get('folderId'));
+    if (hit) setFolder(hit);
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
   // Panel collapse persists across refreshes (per mailbox + scope).
   const collapseKey = `m365panel:${upn}:${scope}`;
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(collapseKey) === '1');
@@ -274,9 +294,11 @@ export function ScopePanel({ upn, scope, label, rows, live, scanLive, mailbox, a
 
   const remote = rows.reduce((a, r) => a + (r.itemCount || 0), 0);
   const backed = rows.reduce((a, r) => a + (r.backedUp || 0), 0);
-  // Authoritative server total from EXO (includes AEA auxiliary content, which
-  // folder counts miss) — prefer it whenever sizes have been fetched.
-  const exoTotal = mailbox && (scope === 'archive' ? mailbox.serverArchiveItems : mailbox.serverPrimaryItems);
+  // Authoritative server total from EXO for the archive scope only (includes AEA
+  // auxiliary content, which folder counts miss). For primary, EXO's ItemCount
+  // also counts calendar/contacts/hidden items the backup never fetches, so the
+  // per-folder counts stay the better denominator.
+  const exoTotal = mailbox && scope === 'archive' ? mailbox.serverArchiveItems : null;
   const remoteShown = exoTotal != null && exoTotal > 0 ? exoTotal : remote;
   const pct = remoteShown ? Math.min(999, Math.round(100 * backed / remoteShown)) : 0;
   const scopeLive = live && live.scope === scope ? live : null;

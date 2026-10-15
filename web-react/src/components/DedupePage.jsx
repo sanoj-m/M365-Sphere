@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api, post } from '../api.js';
 import { fmtBytes, fmtTime } from '../format.js';
 import { MailboxPicker } from './ComparePage.jsx';
@@ -25,6 +25,14 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
     try { localStorage.setItem(`dedupe.target.${upn}`, target); } catch { }
   }, [upn, target]);
 
+  // When a "move duplicates aside" job for this mailbox finishes, the report it
+  // was based on is stale — clear it so a fresh check shows what remains.
+  const hadJob = useRef(false);
+  useEffect(() => {
+    if (job) hadJob.current = true;
+    else if (hadJob.current) { hadJob.current = false; saveReport(null); }
+  }, [job]);
+
   // Log tail: recent events for this mailbox — kept after stop/finish.
   useEffect(() => {
     let t;
@@ -48,7 +56,10 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
   };
 
   const check = () => {
-    setChecking(true); setErr(null); saveReport(null); setRestoreResult(null);
+    setChecking(true); setErr(null); setRestoreResult(null);
+    // Keep the previous report on screen until the new check succeeds —
+    // clearing it up front strands the user without the apply button if the
+    // check is interrupted (tab closed, server restart).
     post('/api/dedupe/check', { upn, target })
       .then(saveReport)
       .catch(e => setErr(e.message))
@@ -102,58 +113,76 @@ function DedupeSession({ upn, checks, jobs, onRemove }) {
       <section className="settings-section">
         <h4>Step 1 — check</h4>
         {!report ? (
+          <div className="settings-row">
+            <p className="settings-hint">
+              Dry run — nothing is changed. Scans every folder
+              {target === 'live' ? ' and verifies full content, so the reported numbers are exactly what will move (Deleted Items and Junk Email are excluded by design)' : ' and scope in the local backup store'}.
+            </p>
+            <button className="btn" disabled={checking || !!job} onClick={check}>{checking ? 'Checking…' : 'Check for duplicates'}</button>
+          </div>
+        ) : (
           <>
             <div className="settings-row">
-              <p className="settings-hint">Dry run — nothing is changed.</p>
-              <button className="btn" disabled={checking || !!job} onClick={check}>{checking ? 'Checking…' : 'Check for duplicates'}</button>
+              <p className="settings-hint" style={{ fontSize: 13 }}>
+                {report.dupItems ? (
+                  <><b>{report.groups}</b> duplicate group(s), <b>{report.dupItems}</b> {target === 'live' ? 'item(s) verified identical — ready to move aside' : 'item(s) can be moved aside'}
+                    {report.reclaimable != null ? ` · ${fmtBytes(report.reclaimable)} reclaimable` : ''}
+                    {report.candidates != null ? ` (${report.candidates} candidate(s) content-checked${report.kept ? `, ${report.kept} kept — differed or unreadable` : ''})` : ''}.</>
+                ) : report.candidates != null ? (
+                  <>No movable duplicates — all {report.candidates} candidate(s) differed in content or were unreadable (kept, protected from a wrong move).</>
+                ) : 'No duplicates found.'}
+              </p>
+              <button className="btn small" disabled={checking || !!job}
+                title="Re-scan the whole mailbox from scratch — picks up mail that arrived since the last check"
+                onClick={check}>{checking ? 'Refreshing…' : '↻ Refresh'}</button>
             </div>
-            {checking && checkProg && (
-              <div className="compare-prog" style={{ margin: '0 0 12px' }}>
-                <div className="compare-prog-main">
-                  <div className="compare-prog-head">
-                    <b>Scanning {checkProg.foldersDone} / {checkProg.foldersTotal} folders</b>
-                    {checkProg.foldersTotal > 0 && <span className="muted">{Math.round(checkProg.foldersDone / checkProg.foldersTotal * 100)}%</span>}
+            {report.messages != null && (
+              <p className="settings-hint">Last scan covered all {report.folders != null ? `${report.folders} folder(s), ` : ''}{report.messages} message(s)
+                {target === 'live' ? ` (${report.excluded != null ? `${report.excluded} folder(s) excluded — ` : ''}Deleted Items & Junk Email excluded by design)` : ''}.</p>
+            )}
+            {report.dupItems > 0 && (
+              <div className="copy-folderlist">
+                {report.sample.map((g, i) => (
+                  <div key={i} className="copy-folder dedupe-group">
+                    <span className="copy-folder-path">
+                      {g.subject} <span className="muted">({g.count}×)</span>
+                      <span className="dedupe-loc">
+                        keep: {g.keep || g.folders[0]} · dup: {(g.duplicates || g.folders.slice(1)).join(', ')}
+                      </span>
+                    </span>
                   </div>
-                  <div className="compare-prog-route muted">
-                    <span title={checkProg.currentFolder}>{checkProg.currentFolder}</span>
-                  </div>
-                </div>
-                <div className={`bar slim${checkProg.foldersTotal ? '' : ' indet'}`}>
-                  <div className="fill" style={checkProg.foldersTotal ? { width: `${Math.min(100, Math.round(checkProg.foldersDone / checkProg.foldersTotal * 100))}%` } : undefined} />
-                </div>
-                <div className="compare-prog-stats">
-                  <span className="muted">{checkProg.messages} message(s) scanned</span>
-                  <span className="muted">{checkProg.groups} candidate group(s) so far</span>
-                </div>
+                ))}
+                {report.groups > report.sample.length && <p className="settings-hint">…and {report.groups - report.sample.length} more group(s)</p>}
               </div>
             )}
           </>
-        ) : (
-          <>
-            {report.dupItems ? (
-              <>
-                <p className="settings-hint" style={{ fontSize: 13 }}>
-                  <b>{report.groups}</b> duplicate group(s), <b>{report.dupItems}</b> item(s) can be moved aside
-                  {report.reclaimable != null ? ` · ${fmtBytes(report.reclaimable)} reclaimable` : ''}.
-                </p>
-                <div className="copy-folderlist">
-                  {report.sample.map((g, i) => (
-                    <div key={i} className="copy-folder dedupe-group">
-                      <span className="copy-folder-path">
-                        {g.subject} <span className="muted">({g.count}×)</span>
-                        <span className="dedupe-loc">
-                          keep: {g.keep || g.folders[0]} · dup: {(g.duplicates || g.folders.slice(1)).join(', ')}
-                        </span>
-                      </span>
-                    </div>
-                  ))}
-                  {report.groups > report.sample.length && <p className="settings-hint">…and {report.groups - report.sample.length} more group(s)</p>}
-                </div>
-              </>
-            ) : (
-              <p className="settings-hint">No duplicates found.</p>
-            )}
-          </>
+        )}
+        {checking && checkProg && (
+          <div className="compare-prog" style={{ margin: '0 0 12px' }}>
+            <div className="compare-prog-main">
+              <div className="compare-prog-head">
+                <b>Scanning {checkProg.foldersDone} / {checkProg.foldersTotal} folders</b>
+                {checkProg.foldersTotal > 0 && <span className="muted">{Math.round(checkProg.foldersDone / checkProg.foldersTotal * 100)}%</span>}
+              </div>
+              <div className="compare-prog-route muted">
+                <span title={checkProg.currentFolder}>{checkProg.currentFolder}</span>
+              </div>
+            </div>
+            <div className={`bar slim${checkProg.foldersTotal ? '' : ' indet'}`}>
+              <div className="fill" style={checkProg.foldersTotal ? { width: `${Math.min(100, Math.round(checkProg.foldersDone / checkProg.foldersTotal * 100))}%` } : undefined} />
+            </div>
+            <div className="compare-prog-stats">
+              <span className="muted">{checkProg.messages} message(s) scanned</span>
+              <span className="muted">{checkProg.groups} candidate group(s) so far</span>
+              {target === 'live' && (
+                <span className="muted">
+                  {checkProg.excluded != null
+                    ? `${checkProg.excluded} folder(s) excluded (Deleted Items & Junk Email)`
+                    : 'excluding Deleted Items & Junk Email'}
+                </span>
+              )}
+            </div>
+          </div>
         )}
       </section>
 
@@ -273,9 +302,9 @@ export default function DedupePage() {
 
   useEffect(() => {
     document.title = 'M365Sphere — Dedupe';
-    document.body.classList.add('compare-mode');
+    document.body.classList.add('dedupe-mode');
     api('/api/mailboxes').then(setMailboxes).catch(e => setErr(e.message));
-    return () => { document.title = 'M365Sphere'; document.body.classList.remove('compare-mode'); };
+    return () => { document.title = 'M365Sphere'; document.body.classList.remove('dedupe-mode'); };
   }, []);
 
   useEffect(() => {
@@ -312,7 +341,7 @@ export default function DedupePage() {
   };
 
   return (
-    <div className="mailbox-page compare-page">
+    <div className="mailbox-page dedupe-page">
       <header className="mailbox-page-head">
         <a className="brand" href="/" title="Go to homepage">
           <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />

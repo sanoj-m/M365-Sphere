@@ -60,6 +60,10 @@ served from `web-react/dist` on port 8080 (localhost only, token-authed).
   cursor).
 - `lib/auth.js` — MSAL client-credentials; `graphToken()`, `ewsToken()`.
 - `lib/pst.js`, `lib/copy.js`, `lib/dedupe.js`, `lib/preview.js`, `lib/setup.js`.
+- `lib/copyemail.js` — `CopyEmailEngine`: dedupe-page-style bulk copy from the
+  local backup to a live folder or another local backup folder (copy only,
+  structure recreated, destination duplicates skipped). See "Copy email" entry
+  in current-state below.
 - `lib/pstingest.js` — `class PstIngest`: walks downloaded EXO PSTs with
   `pst-extractor` (pure JS) and ingests every message into the browsable
   backup store (`data/store` + folders/items rows). Stable `exo`-prefixed
@@ -181,10 +185,21 @@ served from `web-react/dist` on port 8080 (localhost only, token-authed).
 
 ## Running / restarting the server
 
-Runs as a detached `node server.js` process (no service). To restart:
+Runs as a detached `node server.js` process (no service — a Session-0 service
+would break Outlook COM PST export). A WATCHDOG keeps it alive:
+Scheduled Task `M365Sphere-Watchdog` (AtLogon, interactive session) runs
+`scripts/watchdog.ps1`, which every 30 s starts `server.js` if no such process
+exists (log: `data/watchdog.log`). Deliberate stop: create
+`data/watchdog.pause` (delete to re-arm); remove entirely:
+`Unregister-ScheduledTask -TaskName 'M365Sphere-Watchdog'`. Note: in-flight
+jobs (dedupe etc.) are still marked 'interrupted' on any restart — the
+watchdog only shortens downtime, it doesn't make restarts job-safe.
+
+To restart manually (the watchdog will also do it within 30 s if you only
+stop the process):
 
 ```bash
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { \$_.CommandLine -like '*server.js*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }; Start-Sleep -Seconds 2; Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.js' -WorkingDirectory 'C:\Users\sanoj\Documents\m365-sphere' -WindowStyle Hidden"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { \$_.CommandLine -like '*server.js*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }; Start-Sleep -Seconds 2; Start-Process -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList 'server.js' -WorkingDirectory 'C:\Users\sanoj\Documents\m365-pst-backup' -WindowStyle Hidden"
 ```
 
 Interrupting a backup is safe: folders persist incrementally, items resume
@@ -204,6 +219,20 @@ node -e "const D=require('better-sqlite3');const db=new D('data/state.db',{reado
   (throttled 500 ms); the UI polls `/folders` every 3 s.
 - UI buttons: `btn small` / `btn small danger`, errors via `setErr`/`pushLog`.
 - UI timestamps: always `fmtTime`/`fmtDate`/`fmtDateTime` (never slice ISO).
+- Archive folder trees: never show the synthetic "Archive root" node anywhere
+  in the UI — flatten it by name (`roots.flatMap(r => r.name === 'Archive root'
+  ? r.children : [r])`, the browse.jsx rule) so its children render as the
+  roots. Applies to every archive tree (backup view, copy wizards, destination
+  pickers); don't flatten by single-root count (multi-root archives exist).
+- HARD RULE — date fidelity on copy/move: every path that copies or moves an
+  email into a live mailbox MUST preserve the original Date/received/sent
+  timestamps. Live uploads go through `ews.uploadMessage` (Graph MIME import
+  creates undraftable drafts with import-time dates — never use
+  `graph.postMessageMime` for user-facing copies). The receivedAt fallback
+  chain is MIME Date header → `items.receivedAt` → `ftsDate(raw)`; never
+  upload without a date. Any NEW copy/move feature must follow this rule, and
+  any change to upload paths must be verified end-to-end with a Graph readback
+  (`isDraft:false`, receivedDateTime == source date) before shipping.
 
 ## Known tenant/config facts
 
@@ -241,8 +270,146 @@ or accessibility. No new files, wrappers, or abstractions the task doesn't need.
 
 ## Current state / recent changes (refresh each session)
 
-_Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
+_Updated 2026-10-09. Keep to ~10 lines; delete entries older than ~2 weeks._
 
+- "Move email" page (`web-react/src/components/MoveEmailPage.jsx` at
+  `/?moveemail`, nav link in App.jsx): clone of the Copy email page with MOVE
+  semantics + a live→live source mode. Backend `lib/moveemail.js`
+  `MoveEmailEngine` (mirrors CopyEmailEngine: per-upn `_runs`, runProgress,
+  same retry logic, job kind `move-email`); routes `POST /api/move-email`
+  `{srcUpn, srcType:'local'|'live', dstUpn?, target, folderKeys[], dst}`,
+  `/api/move-email/retry`, `GET /api/move-email/:jobId`, `POST
+  /api/stop/move-email`; `/api/status` gains `moveEmailRunning`/`moveEmailRuns`;
+  moveEmailEngine added to the copy/compare guards + full stop; move-email and
+  copy-email run in PARALLEL by design (both verify + skip duplicates at the
+  destination independently), each still one-run-at-a-time per engine.
+  NO-LOSS rule: the source is removed ONLY after the destination holds a
+  verified copy. local→live/local: exact copy-email flow, then the source file
+  is retired to the graveyard + `store.deleteItem` (verified skips — msgId/key
+  live, sha256/row-with-file local — also retire the source with a log line;
+  fuzzy-only skips do NOT retire). live→live (`folderKeys` = `live:<folderId>`,
+  live source tree from the saved `data/live-folders` walk): same mailbox →
+  atomic `graph.moveMessage`; cross-mailbox → getMessageMime →
+  `ews.uploadMessage` → `moveToDeletedItems` only after upload success;
+  already-at-destination → source moved to Deleted Items (recoverable). Live
+  srcType + target 'local' is rejected (400). Live-source bytesTotal is 0
+  (Graph listMessages has no size on this tenant) so the UI hides the bytes
+  counter. Undo: every retired item is recorded in `move_email_plan` (src ids
+  incl. post-move live ids, dstLiveId, graveyard fileId + original items-row
+  JSON; retry runs append to the original job's plan) and `POST
+  /api/move-email/undo {jobId}` reverses a whole run (live same-mailbox →
+  moveMessage back; cross-mailbox → dst copy aside via EWS + source back from
+  Deleted Items; local → dst copy aside + graveyard file/row restored;
+  verified-skip restores only the source, never the pre-existing dst copy).
+  LOCAL ARCHIVE sources are never retired — archive-scope moves act as copies
+  so the local archive backup always stays intact (retireLocal early-returns
+  for scope 'archive'). BUG FIXED 2026-10-13: `_startLocal`'s plan.add
+  referenced `dstFolderId` (only exists in `_startLive`) → ReferenceError on
+  every local retire (file went to graveyard + row deleted, plan never
+  recorded); job 1693's 465 items were rebuilt with
+  `scripts/restore-retired-archive.js <jobId> [--apply]` (recomputes the
+  engine's rel-path mapping, matches graveyard files to original folders by
+  subject+receivedAt against the dst mailbox, handles MIME vs FTS content).
+  `GET /api/move-email/undo/:jobId` → {available,items,label}; ↩ Undo button on
+  finished/stopped/error rows in the Move tasks panel; undo runs as job kind
+  `move-email-undo`; plan cleared only on a zero-failure undo.
+  `scripts/undo-move-email.js <jobId> [--apply]` — one-off reconstruction undo
+  for jobs WITHOUT a plan (job 1575 undone with it: 1824/1824 restored to
+  karsten.v, 24 dst copies moved to archive.admin Deleted Items, 0 failed).
+
+- "Copy email" page (`web-react/src/components/CopyEmailPage.jsx` at
+  `/?copyemail`, nav link in App.jsx; DedupePage-style per-mailbox sessions):
+  copies emails from the local backup (primary + archive, cascading folder
+  tree — `CopyScopeTree`/`CopyTreeNode` now exported from CopyWizard.jsx) to a
+  LIVE folder in any mailbox or a LOCAL backup folder in any mailbox. Copy
+  only; source folder structure recreated under the destination (merge by
+  name); destination duplicates skipped (Message-ID, subject+receivedAt, fuzzy
+  ±2 min/±10% size, toLocal also sha256 + file-on-disk). Backend
+  `lib/copyemail.js` `CopyEmailEngine` (per-mailbox `_runs` like DedupeEngine),
+  routes `POST /api/copy-email` `{srcUpn,dstUpn?,target,folderKeys[],dst}`
+  (live dst `{folderId}`; local dst `{scope,folderId}` or `{scope,folderId:null,
+  name}`), `POST /api/stop/copy-email {upn?}`, `GET /api/copy-email/:jobId`;
+  job kind `copy-email`; `/api/status` gains `copyEmailRunning`/`copyEmailRuns`;
+  `/api/copy` + compareGuard 409 while a copy-email runs. Local-dest folders/
+  items get `cpy`/`cpy-` ids and engine reconciliation skips `cpy%` like `exo%`.
+  Graph-IE (`format='fts'`) items ARE uploadable to live: `ftsMime(buf)` in
+  lib/fts.js reconstructs RFC822 from the FTS stream (transport headers verbatim
+  when present — this tenant's IE streams rarely carry them, so From/Subject are
+  synthesized and To/Cc/Message-ID are usually lost; body html/text +
+  attachments, .msg/OLE blobs skipped, null when nothing usable → item fails
+  'fts stream not reconstructable'); `ews.uploadMessage` stamps the delivery
+  date from it.receivedAt. FTS streams also carry FILETIME props (PtypTime
+  marker `40 00` + propId LE + 8-byte FILETIME, no length): `ftsDate(buf)`
+  extracts PR_MESSAGE_DELIVERY_TIME (0x0E06, fallback PR_CLIENT_SUBMIT_TIME
+  0x0039); `ftsMime` synthesizes a `Date:` header from it when the headers lack
+  one, and copy-email's receivedAt falls back to `ftsDate(raw)`. Root-cause fix
+  for "2025 emails showing as today" (12k fts items had receivedAt NULL):
+  `scripts/backfill-fts-meta.js` now also selects `receivedAt IS NULL` rows and
+  uses ftsDate (receivedAt written with COALESCE — never nulls an existing
+  date); `scripts/fix-copy-dates.js <dstUpn> [--apply]` repairs ALREADY-copied
+  live messages (createdDateTime in a copy-email job window AND
+  |received−created| < 30 min → PATCH `SystemTime 0x0E06` from the backfilled
+  DB date, subject-matched; dry-run default). FIX: `graph.postMessageMime` now sends
+  the MIME base64-encoded — this tenant's Exchange rejects raw MIME
+  (ErrorMimeContentInvalidBase64String); this also un-breaks compare toLive
+  uploads and lib/copy.js uploads.
+
+- Per-mailbox backup master switch: `mailboxes.backupPaused` (migration in
+  store.js), `POST /api/mailbox/:upn/backup-pause {paused}` (pausing also
+  `engine.stopScope` both scopes for that upn), `/api/backup` 409s a paused
+  upn and filters paused upns out of bulk runs, the auto-resume sweep
+  (`incompleteMailboxes`) and queued backup tasks (`pumpFixTasks`) skip paused
+  mailboxes. MailboxPage top bar has a red "⏸ Pause all backups" toggle
+  (`.btn.danger.on` solid red when active) + a "backups paused" chip.
+
+- PST recovery live panel (MailboxPage → "PST recovery" card → "Live panel"):
+  `PstRepairLiveModal` polls `GET /api/mailbox/:upn/pst-repair` every 3 s —
+  live counters from `data/pst-repair-progress.json` (written throttled by
+  `scripts/pst-repair.js`, now supports `--file=name.pst` and writes
+  `pst-import-log.json` after EACH file), log tail (last 60 lines of
+  `data/pst-repair-run.log`), and a per-PST table (status, rebuilt/skipped/
+  unmatched/failed, verify status + remark) with per-file **Rebuild**
+  (`POST …/pst-repair {file}`) and **Verify** (`POST …/pst-verify {file}`)
+  buttons. `POST …/pst-repair/stop` kills the detached run. New
+  `scripts/pst-verify.js` walks every PST reading every message and writes
+  `data/pst-verify-log.json` (`{file,status:'ok'|'failed',retry,remark}` per
+  file, failed files marked `retry:true`); verify job state in
+  `data/pst-verify-job.json`, log `data/pst-verify-run.log`.
+
+- PST recovery fixes (2026-10-08, `scripts/pst-repair.js`/`pst-verify.js`,
+  details `docs/sessions/2026-10-08-pst-recovery-fixes.md`): folder matching
+  now follows Purview's condensed-name scheme (keeps `+ & , /`, whitespace +
+  `:*?"<>|` → `-`) with flat and alnum-squash fallbacks; unresolved PST folders
+  fall back to a mailbox-wide subject+received-minute index; still-unmatched
+  messages are INSERTED as new items (`pst-` itemIds) but ONLY into
+  server-resolved folders — no folders that don't exist on the archive server
+  are ever created (user directive; PST-only paths count unmatched);
+  EWS↔IE archive duplicates can't recur: `mergeArchiveNamespaces` now runs
+  after every archive-seeing backup (not just EWS browse-copy passes) and
+  after the count scan's EWS archive walk (`server.js` /api/scan); recoverable-items
+  search folders skipped; mkdir-before-write; per-folder unreadable logging;
+  verify fails a PST only on genuinely unreadable messages (subfolder notes
+  are informational). New `inserted` counter in pst-import-log records.
+- Dedupe page: per-session **↻ Refresh** button re-scans the whole mailbox
+  (reports carry `folders`/`messages` scanned counts); live apply no longer
+  skips a whole duplicate group when the canonical copy is unreadable (first
+  readable member becomes keep); stale report auto-clears when the job ends.
+- Mailbox totals fix: archive denominators now use aux-partition counts +
+  EXO `serverArchiveItems` when available (`coverage.js`,
+  `/api/mailbox/:upn` derives it); EXO total is archive-scope-only in
+  `browse.jsx` (EXO ItemCount counts calendar/contacts/hidden for primary).
+- Compare "Failed to fetch" fixes: `srv.requestTimeout = 0` (Node ≥18's 300 s
+  default killed the synchronous transfer socket mid-run); crash logging —
+  `uncaughtException`/`unhandledRejection` append stacks to
+  `data/server-crash.log`, server restarted with stdout/stderr →
+  `data/server-out.log`/`server-err.log` (a mid-copy process crash was the
+  real cause; root cause still pending a logged repro). ComparePage: on a
+  network-level fetch failure mid-transfer it polls `/api/compare/progress`
+  and lets the job finish instead of erroring (`transferStillRunning`).
+- Compare Tasks & history panel: one header **Tasks** button (live count
+  badge) opens a combined modal — running compare transfers + copy-engine jobs
+  on top (From:/To: lines, `copying folder x/y: <name>`, bar, Stop), history
+  below, 3 s auto-refresh while open; separate History button removed.
 - Compare transfer history: `compare_log` table (one row per completed
   transfer/folder-copy/undo: ts, kind, direction, upns, folder names, counts,
   errors) written by all three `/api/compare/*` routes;
@@ -256,8 +423,18 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   engine itself (`lib/dedupe.js` `_fuzzyLocalGroups`/`_fuzzyLiveGroups`): local
   check/apply catches differing-content copies within one folder (sha256 pass
   still owns identical content, mailbox-wide), live check/apply adds fuzzy
-  candidates on top of Message-ID groups (live apply still verifies
-  byte-identity before moving — fuzzy false positives only cost a download).
+  candidates on top of Message-ID groups — size-gated where supported:
+  `listMessageKeys` tries `$select=…,size` and falls back without it on
+  `RequestBroker--ParseUri` 400 (THIS tenant rejects `size` in $select, so the
+  gate is inactive here and fuzzy behaves as before — verify still protects);
+  when size is present `_fuzzyLiveGroups` splits each time-cluster into
+  ±10%-size buckets, so same-subject thread replies (different sizes) no longer
+  become candidates (kills most pointless verify downloads; unknown size still
+  allowed). Live apply still verifies byte-identity before moving — fuzzy false
+  positives never cause a wrong move. Live check wording is honest now:
+  "potential duplicate group(s) / candidate item(s) — content verified on
+  apply", and apply progress says "kept — content differed (protected)"
+  instead of "skipped (not identical)".
   One-off cleanup:
   `node scripts/cleanup-local-dupes.js <upn> [--scope=…] [--apply]` (dry by
   default; retires extras to the graveyard, keeps the folder-namespace-matching
@@ -304,7 +481,13 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   unreachable content — it forces PARTIAL; remote deletions keep local copies via
   `deletedFromSourceAt`, old mirror behind `graveyardDeleted`/`pruneDeleted`;
   disk preflight `diskReserveBytes`; `GET /api/mailbox/:upn/coverage`; mailbox
-  page coverage panel + table dot). Phase 2/3: Graph Mailbox Import/Export (BETA)
+  page coverage panel + table dot). Archive item denominators: `scopeCoverage`
+  adds aux-partition counts (`auxPartitionItems`) to folder itemCounts, and
+  `computeCoverage` overrides with EXO `serverArchiveItems` when > 0 (folder
+  counts see only the main partition); PRIMARY always uses folder counts (EXO
+  ItemCount also counts calendar/contacts/hidden items). `browse.jsx` uses the
+  EXO total for the archive scope only; `/api/mailbox/:upn` derives
+  `serverArchiveItems = max(stored, folder+aux sum)`. Phase 2/3: Graph Mailbox Import/Export (BETA)
   provider `lib/graphie.js` — read-only archive folder/item delta + `exportItems`
   (20/batch, FTS opaque streams → `.fts.gz`), 308 aux-partition redirects
   (policy: https+graph.microsoft.com+mailboxes path, 5 hops), engine methods
@@ -388,7 +571,11 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   sampled hash re-check; move mode retires source files to the graveyard.
 - Dedupe: `lib/dedupe.js`, `/api/dedupe/check|apply|restore`, `DedupeModal.jsx`.
   Standalone page `web-react/src/components/DedupePage.jsx` at `/?dedupe` (nav
-  link in dashboard header): MULTIPLE concurrent sessions — add mailboxes via
+  link in dashboard header): session cards in a 3-column grid (`.dedupe-grid`,
+  2/1 columns under 1600/1100 px) on a scrolling page (own `.dedupe-page` +
+  `body.dedupe-mode` — NOT `.compare-page`/`compare-mode`, those lock the
+  viewport at 100vh overflow:hidden). MULTIPLE concurrent sessions — add
+  mailboxes via
   the header picker ("Add session"), each session card has its own scope
   toggle, check → apply → restore, live progress, History (per-mailbox
   `dedupe`/`dedupe-check` job rows; Restart on stopped/error resumes, Verify
@@ -415,8 +602,13 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   "Move duplicates aside"). Live apply is resumable: every verified outcome is
   persisted per item in the `dedupe_live_plan` table (upn+liveId → dstPath,
   status pending|moved|failed|kept; helpers `dedupeLivePlanAll`,
-  `upsertDedupeLiveItem`, `markDedupeLiveItem`, `clearDedupeLivePlan`). A fresh
-  apply clears the plan; `POST /api/dedupe/apply {upn, target:'live',
+  `upsertDedupeLiveItem`, `markDedupeLiveItem`, `clearDedupeLivePlan`). The
+  live CHECK content-verifies every candidate (same fingerprint logic as
+  apply) and seeds the plan (pending = verified dup, kept = differed/
+  unreadable; check clears+reseeds, apply never clears) — reported numbers
+  are exactly what apply moves, and apply reuses the check's verification
+  instead of re-downloading; reports carry `candidates`/`kept`.
+  `POST /api/dedupe/apply {upn, target:'live',
   resume:true}` (the History "Resume" button on stopped/error/interrupted
   `dedupe-live` rows) moves leftover pending items WITHOUT re-fingerprinting
   and skips kept/moved/failed items entirely — an interrupted run never redoes
@@ -424,6 +616,18 @@ _Updated 2026-10-01. Keep to ~10 lines; delete entries older than ~2 weeks._
   The Dedupe page keeps the mailbox log tail visible after stop/finish and has
   a History section (per-mailbox check/dedupe runs with status + detail;
   Restart on stopped/error rows resumes, Verify again on done rows re-checks).
+  Each session's report also has a "↻ Refresh" button that re-scans the whole
+  mailbox from scratch (picks up mail that arrived since the last check);
+  check reports now include `folders`/`messages` scanned counts (shown as a
+  coverage line under the report) so the full-folder scan is visible. Live
+  scans still exclude Deleted Items & Junk Email subtrees by design — now shown
+  live: `_liveFolders` returns `folders.excludedCount`, check progress/report
+  carry `excluded` (folder count) and the Dedupe page shows "N folder(s)
+  excluded (Deleted Items & Junk Email)" during the scan and in the report. Live apply
+  no longer skips a whole group when the canonical copy is unreadable — the
+  first readable member becomes the keep instead (per-group memoized
+  fingerprints); the saved report auto-clears when the mailbox's dedupe job
+  finishes so a fresh check shows what remains.
 - Settings modal (`SettingsPanel.jsx`, gear in header): dark/light theme
   (`data-theme` on <html>, early-applied in index.html), setup/storage links,
   danger zone "Delete all saved data" (two-step type-to-confirm).

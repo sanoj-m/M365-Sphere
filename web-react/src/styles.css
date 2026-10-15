@@ -234,6 +234,8 @@ header h1 {
   border-color: var(--color-danger);
 }
 .btn.danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.12); }
+.btn.danger.on { background: #DC2626; border-color: #DC2626; color: #fff; }
+.btn.danger.on:hover:not(:disabled) { background: #B91C1C; }
 .btn.ghost { color: var(--color-muted-foreground); border-color: var(--color-secondary); }
 .btn.ghost:hover:not(:disabled) { color: var(--color-foreground); border-color: var(--color-border); }
 .btn.small { padding: 3px 8px; font-size: 11.5px; border-radius: 6px; font-weight: 500; }
@@ -1565,9 +1567,99 @@ body, .card, .btn, .logs.log-sidebar, .log-head, .actions-group, .pipeline, .mod
 .copy-folder.dedupe-group:hover { background: transparent; }
 .dedupe-loc { display: block; font-size: 10.5px; color: var(--color-muted-foreground); margin-top: 1px; }
 .copy-folderlist .scope-tree { border: none; }
+/* Copy email page: single-column layout, one mailbox at a time. The fixed
+   copy-tasks sidebar overlays the free space on the right exactly like
+   MailboxPage's activity log — the content column does not shrink for it. */
+.copyemail-page { max-width: 1600px; }
+.copyemail-page .settings-card { max-width: none; width: 100%; }
+.copyemail-tasks .logbox { padding: 10px 12px; }
+/* Copy task cards: route first (prominent), activity line, then bar/stats. */
+.copy-task-card { padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; background: var(--color-muted); }
+.copy-task-route { font-weight: 600; font-size: 12.5px; word-break: break-all; margin-bottom: 2px; }
+.copy-task-activity { font-size: 11.5px; margin-bottom: 2px; }
+.copy-task-card .bar { margin: 4px 0; }
+/* Route from/to as stacked pill chips (panel is narrow) with a ↓ between. */
+.copy-task-route { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.copy-task-bubble {
+  display: block; padding: 3px 10px; border-radius: 999px;
+  background: var(--color-card); border: 1px solid var(--color-secondary);
+  color: var(--color-foreground); text-decoration: none;
+  font-weight: 600; font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.copy-task-bubble:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.copy-task-arrow { align-self: center; color: var(--color-muted-foreground); font-size: 11px; line-height: 1; }
+/* Middle column: picked-emails list fills the column height, scrolls inside. */
+.copy-folderlist.copyemail-items-list { max-height: none; overflow-y: auto; flex: 1 1 0; min-height: 0; }
+.copyemail-items .scope-head { flex: 0 0 auto; }
+.copyemail-focusable { cursor: pointer; }
+.copyemail-focusable:hover { text-decoration: underline; }
+/* Confirm-copy dialog: compact centered card (the page's full-width
+   .settings-card rule must not stretch modals) + clean round radios. */
+.copyemail-page .modal-card.copyemail-confirm { max-width: 460px; width: min(460px, 94vw); }
+.copyemail-confirm input[type="radio"] {
+  appearance: none; -webkit-appearance: none;
+  width: 14px; height: 14px; margin: 0; flex: none; cursor: pointer;
+  border: 1.5px solid var(--color-muted-foreground); border-radius: 50%;
+  display: inline-grid; place-content: center; background: transparent;
+}
+.copyemail-confirm input[type="radio"]:checked { border-color: var(--color-accent); }
+.copyemail-confirm input[type="radio"]:checked::before {
+  content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent);
+}
+.copyemail-confirm input[type="radio"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+/* Source + Destination side by side: one row at ~viewport height, equal
+   columns; both folder trees scroll internally. Scoped to the copy-email
+   page so the copy wizard modal keeps its compact sizing. */
+.copyemail-row {
+  display: flex; gap: var(--space-xl); align-items: stretch;
+  height: calc(100vh - 280px); min-height: 340px;
+  border-bottom: 1px solid var(--color-secondary);
+}
+.copyemail-row > .settings-section {
+  flex: 1 1 0; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column;
+  border-bottom: none; overflow: hidden;
+}
+.copyemail-row > .settings-section > * { flex: 0 0 auto; }
+.copy-folderlist.copyemail-src {
+  max-height: none; overflow: visible;
+  display: flex; flex-direction: column;
+  flex: 1 1 0; min-height: 0;
+}
+.copyemail-src .copyemail-scope { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; }
+.copyemail-src .copyemail-scope.collapsed { flex: 0 0 auto; }
+.copyemail-src .scope-tree { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; margin-top: 0; }
+.copyemail-src .scope-tree .scope-head { flex: 0 0 auto; }
+.copyemail-src .scope-tree .tree { max-height: none; flex: 1 1 0; min-height: 0; overflow-y: auto; }
+/* Destination column: the folder tree/list fills the remaining column
+   height and scrolls internally, like the source panels. */
+.copy-folderlist.copyemail-dst {
+  max-height: none; overflow: hidden;
+  display: flex; flex-direction: column;
+  flex: 1 1 0; min-height: 0;
+}
+.copyemail-dst .scope-tree { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; margin-top: 0; }
+.copyemail-dst .scope-tree .scope-head { flex: 0 0 auto; }
+.copyemail-dst .scope-tree .tree { max-height: none; flex: 1 1 0; min-height: 0; overflow-y: auto; }
+@media (max-width: 1100px) {
+  .copyemail-row { flex-direction: column; height: auto; min-height: 0; }
+  .copyemail-row > .settings-section { overflow: visible; }
+  .copyemail-row .copy-folderlist.copyemail-src { height: 60vh; }
+  .copyemail-row .copy-folderlist.copyemail-dst { height: 50vh; }
+  .copyemail-row .copy-folderlist.copyemail-items-list { height: 40vh; }
+}
 .copy-tree-label { display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
 .copy-tree-label input { flex: none; accent-color: var(--color-accent); }
 .copy-select-all { font-size: 12px; }
+/* "Select subfolders only" affordance on copy tree rows — hidden until hover. */
+.tree-subonly-btn {
+  opacity: 0; flex: none; border: none; background: none; cursor: pointer;
+  color: var(--color-muted-foreground); padding: 1px 3px; border-radius: 4px;
+  display: inline-flex; align-items: center;
+}
+.tree-row:hover .tree-subonly-btn, .tree-subonly-btn:focus-visible { opacity: 1; }
+.tree-subonly-btn:hover { color: var(--color-accent); background: var(--color-muted); }
 
 /* ---------- Mailbox table redesign ---------- */
 /* Two-tier sticky header with column groups */
@@ -1803,7 +1895,11 @@ body.compare-mode #root { padding: 0; }
 }
 .info-tip:hover .info-pop, .info-tip:focus-within .info-pop { display: block; }
 
-.dedupe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); gap: 18px; padding: 0 18px 18px; align-items: start; }
+.dedupe-page { max-width: none; padding: var(--space-md); min-height: 100vh; }
+body.dedupe-mode #root { padding: 0; }
+.dedupe-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 0 18px 18px; align-items: start; }
+@media (max-width: 1600px) { .dedupe-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .dedupe-grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- PST rebuild report table ---------- */
 .report-table { width: 100%; border-collapse: collapse; font-size: 12px; }

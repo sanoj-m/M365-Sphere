@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const { Store } = require('../lib/store');
-const { ftsPreview } = require('../lib/fts');
+const { ftsPreview, ftsDate } = require('../lib/fts');
 const { safeName } = require('../lib/util');
 
 const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config.json'), 'utf8'));
@@ -16,13 +16,13 @@ const store = new Store(cfg.dataDir);
 // Materialize rows up front: writing while a SELECT iteration is open on the
 // same connection crashes better-sqlite3.
 const rows = store.db.prepare(`SELECT upn, scope, folderId, itemId, fileId FROM items
-  WHERE format='fts' AND (subject IS NULL OR sender IS NULL) AND fileId IS NOT NULL
+  WHERE format='fts' AND (subject IS NULL OR sender IS NULL OR receivedAt IS NULL) AND fileId IS NOT NULL
   ${onlyUpn ? 'AND upn=?' : ''}`).all(...(onlyUpn ? [onlyUpn] : []));
 console.log(`${rows.length} FTS item(s) missing metadata`);
 const folderPath = new Map();
 for (const f of store.db.prepare(`SELECT upn, scope, folderId, path FROM folders`).all())
   folderPath.set(`${f.upn} ${f.scope} ${f.folderId}`, f.path);
-const upd = store.db.prepare(`UPDATE items SET subject=?, sender=?, receivedAt=? WHERE upn=? AND scope=? AND folderId=? AND itemId=?`);
+const upd = store.db.prepare(`UPDATE items SET subject=?, sender=?, receivedAt=COALESCE(?, receivedAt) WHERE upn=? AND scope=? AND folderId=? AND itemId=?`);
 const segs = p => String(p || '').split('/').filter(Boolean).map(safeName);
 let done = 0, failed = 0, skipped = 0;
 const tx = store.db.transaction(batch => { for (const b of batch) upd.run(...b); });
@@ -34,7 +34,11 @@ for (const r of rows) {
     if (fs.statSync(f).size > 400 * 1024 * 1024) { skipped++; continue; } // avoid OOM on giant streams
     const buf = zlib.gunzipSync(fs.readFileSync(f));
     const pv = ftsPreview(buf, { metaOnly: true });
-    batch.push([pv.subject !== '(no subject)' ? pv.subject : null, pv.from || null, pv.date || null, r.upn, r.scope, r.folderId, r.itemId]);
+    // Transport-header date when present, else the FILETIME delivery/submit
+    // property (metaOnly on large streams scans head+tail only — time props sit
+    // in the message meta block at the head, covered by both).
+    const date = pv.date || ftsDate(buf);
+    batch.push([pv.subject !== '(no subject)' ? pv.subject : null, pv.from || null, date, r.upn, r.scope, r.folderId, r.itemId]);
     if (batch.length >= 500) { tx(batch); batch = []; }
     done++;
   } catch { failed++; }

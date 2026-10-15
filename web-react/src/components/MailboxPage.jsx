@@ -24,6 +24,13 @@ export default function MailboxPage({ upn }) {
   const [planOpen, setPlanOpen] = useState(false);
   const [planScope, setPlanScope] = useState(null); // 'primary' | 'archive' | null
   const [guideOpen, setGuideOpen] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
+  const togglePause = async () => {
+    setPauseBusy(true);
+    try { await post('/api/mailbox/' + encodeURIComponent(upn) + '/backup-pause', { paused: !(d && d.mailbox.backupPaused) }); await load(); }
+    catch (e) { setErr(e.message); }
+    setPauseBusy(false);
+  };
 
   useEffect(() => {
     document.title = `M365Sphere — ${upn}`;
@@ -142,7 +149,19 @@ export default function MailboxPage({ upn }) {
         </a>
         <h2 className="mono">{upn}</h2>
         {d && <span className={`chip ${chipClass(d.status)}`}>{d.status}</span>}
+        {d && d.mailbox.backupPaused ? <span className="chip error">backups paused</span> : null}
         {d && d.pstStatus ? <span className="chip info">PST: {d.pstStatus}</span> : null}
+        {d && (
+          <button
+            className={`btn small danger${d.mailbox.backupPaused ? ' on' : ''}`}
+            disabled={pauseBusy}
+            title={d.mailbox.backupPaused
+              ? 'Master switch is ON: all backups and automatic resume are paused for this mailbox — click to resume'
+              : 'Master switch: stop ALL backups for this mailbox (halts a running backup and blocks automatic resume)'}
+            onClick={togglePause}>
+            {pauseBusy ? '…' : d.mailbox.backupPaused ? '⏸ Backups paused — resume' : '⏸ Pause all backups'}
+          </button>
+        )}
         <span className="spacer" />
         {d && <a className="btn small" href={`/?compare=${encodeURIComponent(upn)}`} title="Compare the local backup with the live mailbox side by side and copy/move individual emails between them">Compare</a>}
         {d && <button className="btn small" disabled={!hasData} title={hasData ? 'Copy or move downloaded emails into another live mailbox (works while a backup runs)' : 'No downloaded emails yet — run a backup first'} onClick={() => setCopyOpen(true)}>Copy to mailbox…</button>}
@@ -288,9 +307,10 @@ function PstRepairPanel({ pr, upn, onChanged }) {
   const pct = total ? Math.round(100 * pr.rebuiltItems / total) : 0;
   const [busy, setBusy] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
   const run = async () => {
     setBusy(true);
-    try { await post('/api/mailbox/' + encodeURIComponent(upn) + '/pst-repair', {}); }
+    try { await post('/api/mailbox/' + encodeURIComponent(upn) + '/pst-repair', {}); setLiveOpen(true); }
     catch (e) { dialog.notify(e.message, 'error'); }
     setBusy(false);
     onChanged && onChanged();
@@ -301,12 +321,10 @@ function PstRepairPanel({ pr, upn, onChanged }) {
         <span className="chip cov-good">PST recovery</span>
         {pr.lastRun && <span className="muted">last run {fmtDateTime(pr.lastRun)}</span>}
         <span style={{ flex: 1 }} />
-        {pr.running
-          ? <span className="muted">Running… {pr.lastLine ? pr.lastLine.slice(0, 60) : ''}</span>
-          : <>
-              <button className="btn small" onClick={() => setReportOpen(true)}>Rebuild report</button>
-              <button className="btn small" disabled={busy} onClick={run}>{busy ? 'Starting…' : 'Run PST recovery'}</button>
-            </>}
+        {pr.running && <span className="muted">Running… {pr.lastLine ? pr.lastLine.slice(0, 60) : ''}</span>}
+        <button className="btn small" onClick={() => setReportOpen(true)}>Rebuild report</button>
+        <button className="btn small" onClick={() => setLiveOpen(true)}>Live panel</button>
+        {!pr.running && <button className="btn small" disabled={busy} onClick={run}>{busy ? 'Starting…' : 'Run PST recovery'}</button>}
       </div>
       <div className="cov-scope">
         <span className="cov-scope-label">PSTs imported</span>
@@ -327,18 +345,93 @@ function PstRepairPanel({ pr, upn, onChanged }) {
         {pr.totals.failed > 0 && <span className="warn-text"> · {pr.totals.failed.toLocaleString()} failed</span>}
         {pr.totals.verifyFailures > 0 && <span className="warn-text" title="Rebuilt emails whose image attachments failed the integrity check"> · {pr.totals.verifyFailures.toLocaleString()} verify failures</span>}
       </div>
-      {pr.psts.length > 0 && (
-        <div className="cov-partitions muted">
-          {pr.psts.map(p => (
-            <div key={p.file} title={p.processed ? `${p.file}: ${p.replaced} replaced${p.verifyFailures ? `, ${p.verifyFailures} verify failures` : ''}` : `${p.file}: not yet processed`}>
-              {p.file}{' — '}{p.processed
-                ? <>{(p.replaced || 0).toLocaleString()} rebuilt{(p.verifyFailures || 0) > 0 ? ` · ${p.verifyFailures} verify` : ''}</>
-                : <span className="warn-text">pending{p.size ? ` · ${fmtBytes(p.size)}` : ''}</span>}
-            </div>
-          ))}
-        </div>
-      )}
       {reportOpen && <PstRepairReportModal upn={upn} onClose={() => setReportOpen(false)} />}
+      {liveOpen && <PstRepairLiveModal upn={upn} onClose={() => { setLiveOpen(false); onChanged && onChanged(); }} />}
+    </div>
+  );
+}
+
+function PstRepairLiveModal({ upn, onClose }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const logRef = useRef(null);
+  const load = useCallback(() => api('/api/mailbox/' + encodeURIComponent(upn) + '/pst-repair').then(setD).catch(e => setErr(e.message)), [upn]);
+  useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; });
+  const act = async (p, body) => {
+    try { await post('/api/mailbox/' + encodeURIComponent(upn) + p, body || {}); load(); }
+    catch (e) { dialog.notify(e.message, 'error'); }
+  };
+  const cur = d && d.running && d.progress && d.progress.current;
+  const showVerifyLog = d && !d.running && d.verifyRunning;
+  const lines = showVerifyLog ? (d.verifyLines || []) : (d && d.lines) || [];
+  const rowStatus = p => {
+    if (cur && cur.file === p.file) return 'running';
+    if (p.missing) return 'missing';
+    if (p.verify && p.verify.status === 'failed') return 'failed';
+    if (p.processed) return 'done';
+    return 'pending';
+  };
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-card settings-card" role="dialog" aria-modal="true" aria-label="PST recovery live panel" style={{ maxWidth: 1100, width: '95vw' }} onClick={e => e.stopPropagation()}>
+        <div className="settings-head">
+          <h3>PST recovery — {upn}</h3>
+          {d && d.running && <span className="chip syncing">running{cur ? ` — ${cur.file}` : ''}</span>}
+          {d && d.verifyRunning && <span className="chip syncing">verifying</span>}
+          <span style={{ flex: 1 }} />
+          {d && !d.running && <button className="btn small" onClick={() => act('/pst-repair', {})}>Run all</button>}
+          {d && d.running && <button className="btn small danger" onClick={() => act('/pst-repair/stop', {})}>Stop</button>}
+          {d && !d.verifyRunning && <button className="btn small" onClick={() => act('/pst-verify', {})}>Verify all</button>}
+          <button className="btn small" onClick={onClose} aria-label="Close panel">✕</button>
+        </div>
+        {err && <p className="warn-text">{err}</p>}
+        {!d && !err && <p className="muted">Loading…</p>}
+        {d && (
+          <>
+            {cur && (
+              <p className="muted" style={{ margin: '4px 0' }}>
+                <strong className="mono">{cur.file}</strong>{' — '}
+                {cur.messages.toLocaleString()} read · {cur.replaced.toLocaleString()} rebuilt · {cur.skipped.toLocaleString()} skipped
+                {cur.unmatched > 0 && ` · ${cur.unmatched.toLocaleString()} unmatched`}
+                {cur.failed > 0 && <span className="warn-text"> · {cur.failed.toLocaleString()} failed</span>}
+              </p>
+            )}
+            <pre ref={logRef} className="mono" style={{ background: 'var(--bg-alt, #111)', padding: 8, borderRadius: 6, maxHeight: 160, overflow: 'auto', fontSize: 11, whiteSpace: 'pre-wrap', margin: '6px 0' }}>
+              {lines.length ? lines.join('\n') : (d.running || d.verifyRunning ? 'waiting for output…' : 'no log yet — start a run')}
+            </pre>
+            <div className="cov-partitions" style={{ maxHeight: '46vh', overflow: 'auto' }}>
+              <table className="report-table">
+                <thead><tr><th>PST file</th><th>Size</th><th>Status</th><th>Rebuilt</th><th>Skipped</th><th>Unmatched</th><th>Failed</th><th>Verify</th><th>Remark</th><th></th></tr></thead>
+                <tbody>
+                  {d.psts.map(p => {
+                    const st = rowStatus(p);
+                    return (
+                      <tr key={p.file}>
+                        <td className="mono" title={p.file}>{p.file.replace(/^.*@.*\./, '…')}</td>
+                        <td>{p.size != null ? fmtBytes(p.size) : '—'}</td>
+                        <td><span className={`chip ${st === 'done' ? 'done' : st === 'running' ? 'syncing' : st === 'failed' ? 'error' : 'pending'}`}>{st}</span></td>
+                        <td>{st === 'running' && cur ? cur.replaced.toLocaleString() : (p.replaced || 0).toLocaleString()}</td>
+                        <td>{st === 'running' && cur ? cur.skipped.toLocaleString() : (p.skipped || 0).toLocaleString()}</td>
+                        <td>{st === 'running' && cur ? cur.unmatched.toLocaleString() : (p.unmatched || 0).toLocaleString()}</td>
+                        <td>{(st === 'running' && cur ? cur.failed : p.failed) > 0 ? <span className="warn-text">{(st === 'running' && cur ? cur.failed : p.failed).toLocaleString()}</span> : 0}</td>
+                        <td>{p.verify
+                          ? (p.verify.status === 'ok' ? <span className="good-text">ok</span> : <span className="warn-text">failed</span>)
+                          : (p.verifyFailures > 0 ? <span className="warn-text">{p.verifyFailures} img</span> : '—')}</td>
+                        <td className="muted" title={p.verify?.remark || ''} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{p.verify?.remark || ''}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn small" disabled={d.running} title="Rebuild this PST again" onClick={() => act('/pst-repair', { file: p.file })}>Rebuild</button>{' '}
+                          <button className="btn small" disabled={d.verifyRunning} title="Verify this PST" onClick={() => act('/pst-verify', { file: p.file })}>Verify</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

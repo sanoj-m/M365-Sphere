@@ -199,7 +199,20 @@ React 18 + Vite SPA. Highlights:
   interrupted/stopped run moves leftover verified items without re-scanning or
   re-verifying already-processed ones.
   Per-mailbox run history (Restart failed/stopped, Verify again), live check
-  progress, persistent log tail, restore for local runs.
+  progress (incl. excluded-folder count), persistent log tail, restore for
+  local runs.
+- **Copy email** (`/?copyemail`): bulk-copy backed-up folders (primary +
+  archive, cascading tree) into any live mailbox folder or another local
+  backup — folder structure recreated with merge-by-name, destination
+  duplicates skipped (Message-ID / subject+date / fuzzy / sha256), per-item
+  retries, resumable, live progress tasks panel.
+- **Move email** (`/?moveemail`): same as Copy email but move semantics with a
+  no-loss rule — the destination copy is verified before the source is removed
+  (live sources → Deleted Items, local primary → graveyard, local archive is
+  always kept). Sources can be the local backup OR live folders (live→live:
+  atomic same-mailbox moves; cross-mailbox via EWS upload with original
+  dates). Per-item undo plan (`move_email_plan`) → one-click ↩ Undo per run;
+  `force` mode uploads fuzzy look-alikes too. Runs in parallel with copy jobs.
 - **Running tasks panel**: live card per parallel job (backup, verify, PST, sizes,
   EXO, scan, fix-gaps) with progress and Stop.
 - Dark/light theme, Asia/Dubai timestamps, browser-local caching for instant loads,

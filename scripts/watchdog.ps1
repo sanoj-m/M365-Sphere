@@ -1,29 +1,29 @@
-# Watchdog: keeps M365-Sphere (server.js) running. Checks the API every 60s;
-# if unreachable, restarts the server. Logs to data/watchdog.log.
-# Started detached by the agent; survives until machine reboot or manual kill
-# (Stop-Process on the powershell running watchdog.ps1).
-$ErrorActionPreference = 'Continue'
-$work = 'C:\Users\sanoj\Documents\m365-sphere'
-$log = Join-Path $work 'data\watchdog.log'
-function Log($msg) { "$(Get-Date -Format o) $msg" | Out-File $log -Append }
+# M365-Sphere watchdog: keeps `node server.js` alive.
+# Checks every 30 s; if no node process with server.js in its command line
+# exists, starts a fresh detached one. Runs in the interactive user session
+# (a Scheduled Task at logon) so Outlook COM / PST export keeps working —
+# a real Windows service (Session 0) would break PST export.
+#
+# Deliberate stop: create an empty file data\watchdog.pause — the watchdog
+# then leaves the server down. Delete the file to re-arm. To remove the
+# watchdog entirely: Unregister-ScheduledTask -TaskName 'M365Sphere-Watchdog'.
+
+$dir = 'C:\Users\sanoj\Documents\m365-pst-backup'
+$log = Join-Path $dir 'data\watchdog.log'
+$pause = Join-Path $dir 'data\watchdog.pause'
+$node = 'C:\Program Files\nodejs\node.exe'
 
 while ($true) {
   try {
-    $tok = Get-Content (Join-Path $work 'data\session-token') -Raw -ErrorAction Stop
-    $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/status' -Headers @{ 'x-session-token' = $tok.Trim() } -TimeoutSec 10 -UseBasicParsing
-    if ($r.StatusCode -ne 200) { throw "HTTP $($r.StatusCode)" }
-  } catch {
-    $running = Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-      Where-Object { $_.CommandLine -like '*server.js*' -and $_.CommandLine -like '*m365-sphere*' -or $_.CommandLine -like '*server.js*' }
+    if (Test-Path $pause) { Start-Sleep -Seconds 30; continue }
+    $running = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -like '*server.js*' }
     if (-not $running) {
-      Log "server.js not running (check failed: $($_.Exception.Message)) - starting"
-      # Redirect via cmd append (>>) - Start-Process -RedirectStandardOutput fails
-      # when the log file is already open by another process.
-      Start-Process -FilePath 'cmd.exe' -ArgumentList '/c node server.js >> data\server-console.log 2>> data\server-error.log' `
-        -WorkingDirectory $work -WindowStyle Hidden
-    } else {
-      Log "server process alive but API unreachable ($($_.Exception.Message)) - not touching it"
+      Add-Content $log "$(Get-Date -Format o) server.js not running — starting"
+      Start-Process -FilePath $node -ArgumentList 'server.js' -WorkingDirectory $dir -WindowStyle Hidden
     }
+  } catch {
+    Add-Content $log "$(Get-Date -Format o) watchdog error: $($_.Exception.Message)"
   }
-  Start-Sleep -Seconds 60
+  Start-Sleep -Seconds 30
 }

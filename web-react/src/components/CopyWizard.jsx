@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api, post } from '../api.js';
 import { fmtBytes } from '../format.js';
-import { ChevronRight, FolderOpen, FolderClosed } from 'lucide-react';
+import { ChevronRight, FolderOpen, FolderClosed, CornerDownRight } from 'lucide-react';
 
 // Same tree shape as the backup view (browse.jsx): parent/child folders with
 // expand/collapse, plus a checkbox per folder for copy/move selection.
@@ -17,19 +17,24 @@ function buildTree(rows) {
   return roots;
 }
 
-function CopyTreeNode({ node, expanded, toggleExp, selected, onToggleSel }) {
+export function CopyTreeNode({ node, expanded, toggleExp, selected, onToggleSel, rootTotals, isRoot, onFocusFolder, focusId, subOnlyAction }) {
   const open = expanded.has(node.folderId);
   const hasKids = node.children.length > 0;
-  // Selection toggles this folder plus every selectable descendant.
+  // Selection cascades DOWN: toggling checks this folder plus every selectable
+  // descendant. Never upward — a parent merely shows the indeterminate dash
+  // when some (not all) descendants are checked.
   const desc = [];
   const walk = n => { if (n.backedUp > 0) desc.push(n.scope + ':' + n.folderId); n.children.forEach(walk); };
   walk(node);
   const picked = desc.filter(k => selected.has(k)).length;
   const checked = desc.length > 0 && picked === desc.length;
   const indet = picked > 0 && picked < desc.length;
+  // rootTotals: top-level rows show the subtree total with the own count muted.
+  let sub = 0;
+  if (rootTotals && isRoot) { const w = n => { sub += n.backedUp || 0; n.children.forEach(w); }; w(node); }
   return (
     <>
-      <div className="tv-control tree-row" role="treeitem" aria-expanded={hasKids ? open : undefined}>
+      <div className={`tv-control tree-row${focusId === node.folderId ? ' current' : ''}`} role="treeitem" aria-expanded={hasKids ? open : undefined}>
         <span
           className={`tv-indicator${open ? ' open' : ''}${hasKids ? '' : ' leaf'}`}
           onClick={() => hasKids && toggleExp(node.folderId)}
@@ -45,15 +50,33 @@ function CopyTreeNode({ node, expanded, toggleExp, selected, onToggleSel }) {
           {hasKids
             ? (open ? <FolderOpen size={15} className="tv-icon" /> : <FolderClosed size={15} className="tv-icon" />)
             : <FolderClosed size={14} className="tv-icon tv-leaf-icon" />}
-          <span className="tree-name">{node.name || '(root)'}</span>
+          <span className={`tree-name${onFocusFolder ? ' copyemail-focusable' : ''}`}
+            onClick={onFocusFolder ? e => { e.stopPropagation(); onFocusFolder(node); } : undefined}
+            title={onFocusFolder ? 'Open this folder to pick individual emails' : undefined}>{node.name || '(root)'}</span>
         </label>
-        <span className="tv-stats mono">{node.backedUp}</span>
+        {subOnlyAction && hasKids && (
+          <button type="button" className="tree-subonly-btn" title="Select subfolders only (not this folder)"
+            aria-label={`Select only the subfolders of ${node.name || '(root)'}`}
+            onClick={e => {
+              e.stopPropagation();
+              const kids = [];
+              node.children.forEach(function w(n) { if (n.backedUp > 0) kids.push(n.scope + ':' + n.folderId); n.children.forEach(w); });
+              if (kids.length) onToggleSel(kids, true);
+              if (node.backedUp > 0) onToggleSel([node.scope + ':' + node.folderId], false);
+            }}>
+            <CornerDownRight size={12} />
+          </button>
+        )}
+        {rootTotals && isRoot
+          ? <span className="tv-stats mono" title={`${sub} item(s) including subfolders`}>{sub}</span>
+          : <span className="tv-stats mono">{node.backedUp}</span>}
       </div>
       {open && hasKids && (
         <div className="tv-branch-content tree-kids">
           {node.children.map(c => (
             <CopyTreeNode key={c.folderId} node={c} expanded={expanded} toggleExp={toggleExp}
-              selected={selected} onToggleSel={onToggleSel} />
+              selected={selected} onToggleSel={onToggleSel} rootTotals={rootTotals}
+              onFocusFolder={onFocusFolder} focusId={focusId} subOnlyAction={subOnlyAction} />
           ))}
         </div>
       )}
@@ -61,12 +84,28 @@ function CopyTreeNode({ node, expanded, toggleExp, selected, onToggleSel }) {
   );
 }
 
-function CopyScopeTree({ label, rows, flattenRoot, selected, onToggleSel, onSetAll }) {
-  const [expanded, setExpanded] = useState(() => new Set(rows.map(r => r.folderId)));
+export function CopyScopeTree({ label, rows, flattenRoot, selected, onToggleSel, onSetAll, hideCount, persistKey, rootTotals, onFocusFolder, focusId, subOnlyAction }) {
+  // persistKey (optional): expanded folderIds survive a browser refresh,
+  // stored as a JSON array under that localStorage key.
+  const [expanded, setExpanded] = useState(() => {
+    if (persistKey) {
+      try {
+        const a = JSON.parse(localStorage.getItem(persistKey) || 'null');
+        if (Array.isArray(a)) return new Set(a);
+      } catch { }
+    }
+    return new Set(rows.map(r => r.folderId));
+  });
+  useEffect(() => {
+    if (!persistKey) return;
+    try { localStorage.setItem(persistKey, JSON.stringify([...expanded])); } catch { }
+  }, [persistKey, expanded]);
   const toggleExp = id => setExpanded(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   if (!rows.length) return null;
   let roots = buildTree(rows);
-  if (flattenRoot && roots.length === 1 && roots[0].children.length) roots = roots[0].children;
+  // The synthetic store root is not a real mailbox folder — show its children
+  // at top level (same rule as browse.jsx), not only when it's the sole root.
+  if (flattenRoot) roots = roots.flatMap(r => r.name === 'Archive root' ? r.children : [r]);
   const keys = rows.filter(r => r.backedUp > 0).map(r => r.scope + ':' + r.folderId);
   const picked = keys.filter(k => selected.has(k)).length;
   const allChecked = keys.length > 0 && picked === keys.length;
@@ -84,7 +123,7 @@ function CopyScopeTree({ label, rows, flattenRoot, selected, onToggleSel, onSetA
           />
           {label && <b>{label}</b>}
         </label>
-        <span className="muted">{picked}/{keys.length} folders selected</span>
+        {!hideCount && <span className="muted">{picked}/{keys.length} folders selected</span>}
         <span className="tree-all-btns">
           <button type="button" className="btn small" onClick={() => setExpanded(new Set(rows.map(r => r.folderId)))}>Expand all</button>
           <button type="button" className="btn small" onClick={() => setExpanded(new Set())}>Collapse all</button>
@@ -92,7 +131,8 @@ function CopyScopeTree({ label, rows, flattenRoot, selected, onToggleSel, onSetA
       </div>
       <div className="tree">
         {roots.map(n => <CopyTreeNode key={n.folderId} node={n} expanded={expanded} toggleExp={toggleExp}
-          selected={selected} onToggleSel={onToggleSel} />)}
+          selected={selected} onToggleSel={onToggleSel} rootTotals={rootTotals} isRoot
+          onFocusFolder={onFocusFolder} focusId={focusId} subOnlyAction={subOnlyAction} />)}
       </div>
     </div>
   );
