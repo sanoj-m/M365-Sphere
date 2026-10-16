@@ -91,7 +91,7 @@ function FolderManager({ upn, onChanged }) {
   };
 
   const groups = [['primary', 'Primary mailbox'], ['archive', 'Online archive']]
-    .map(([scope, label]) => ({ scope, label, tree: buildTree(folders.filter(f => f.scope === scope)) }))
+    .map(([scope, label]) => ({ scope, label, tree: buildTree(folders.filter(f => f.scope === scope)).flatMap(r => r.name === 'Archive root' ? r.children : [r]) }))
     .filter(g => g.tree.length);
 
   return (

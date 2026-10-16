@@ -16,3 +16,4 @@ scripts/compare-archive-11projects.js
 scripts/fix-kvbids-root-folders.js
 scripts/move-pc2-projects.js
 scripts/move-pc2-sweep.js
+scripts/move-pc2-verify-skips.js

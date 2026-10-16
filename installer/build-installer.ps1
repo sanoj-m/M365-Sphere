@@ -99,10 +99,11 @@ foreach ($required in @('server.js', 'lib\engine.js', 'package.json', 'package-l
 Info 'stage sanity checks passed.'
 
 # --- 4) compile ---
-Info 'compiling installer…'
+$pkgVer = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+Info "compiling installer (version $pkgVer)…"
 Push-Location (Join-Path $root 'installer')
 try {
-  & $makensis /V2 m365-sphere.nsi
+  & $makensis /V2 "/DAPPVER=$pkgVer" m365-sphere.nsi
   if ($LASTEXITCODE) { Die "makensis failed (exit $LASTEXITCODE)." }
 } finally { Pop-Location }
 
@@ -116,6 +117,8 @@ Info "done: installer\M365Sphere-Setup.exe ($size MB)"
 $zip = Join-Path $root 'installer\M365Sphere-update.zip'
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+# sha256 sidecar (sha256sum format) — the updater refuses to apply a zip without it.
+$hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+"$hash  M365Sphere-update.zip" | Set-Content -Path "$zip.sha256" -Encoding ascii -NoNewline
 $zsize = [math]::Round((Get-Item $zip).Length / 1MB, 2)
-$pkgVer = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
-Info "done: installer\M365Sphere-update.zip ($zsize MB) - attach to GitHub Release v$pkgVer"
+Info "done: installer\M365Sphere-update.zip ($zsize MB) + .sha256 - attach BOTH to GitHub Release v$pkgVer"

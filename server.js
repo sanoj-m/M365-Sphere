@@ -45,6 +45,20 @@ const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 cfg.dataDir = path.resolve(__dirname, cfg.dataDir || './data');
 cfg.pstDir = path.resolve(__dirname, cfg.pstDir || './pst-export');
 
+// Disk-space preflight shared by the backup/PST routes and the EXO export
+// loop: returns an Error when the store drive is below the configured reserve
+// (default 10 GB), null otherwise. A statfs failure must not block jobs.
+function diskCheck() {
+  try {
+    const st = fs.statfsSync(cfg.dataDir);
+    const reserve = cfg.diskReserveBytes || 10 * 1024 ** 3;
+    if (st.available < reserve) {
+      return new Error(`insufficient disk space: ${(st.available / 2 ** 30).toFixed(1)} GB free, reserve is ${(reserve / 2 ** 30).toFixed(1)} GB — free space or lower diskReserveBytes`);
+    }
+  } catch { }
+  return null;
+}
+
 // The server runs detached with no console — capture fatal errors to a log so
 // mid-job crashes (which the dashboard only sees as "Failed to fetch") are
 // diagnosable after the fact.
@@ -56,6 +70,10 @@ const logCrash = (kind, err) => {
 };
 process.on('uncaughtException', err => { logCrash('uncaughtException', err); console.error(err); process.exit(1); });
 process.on('unhandledRejection', err => { logCrash('unhandledRejection', err); console.error('unhandledRejection:', err); });
+// Clean-but-unexpected exits (EADDRINUSE path, updater exit-42, signal kills)
+// leave a marker too — V8 fatal errors print to stderr (captured by the
+// watchdog's redirected server-err.log since 2026-10-16).
+process.on('exit', code => logCrash('exit', `process exiting with code ${code}`));
 
 const store = new Store(cfg.dataDir);
 // Startup reconciliation: jobs left 'running' by a crash become 'interrupted';
@@ -75,6 +93,13 @@ const log = (level, mailbox, message) => {
   store.log(level, mailbox || '', message);
   bus.emit('event', { ts: new Date().toISOString(), level, mailbox: mailbox || '', message });
 };
+// Surface jobs reconcileJobs just marked 'interrupted' (server crash/restart)
+// so a dead job is visible in the event log instead of dying silently.
+try {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const dead = store.db.prepare(`SELECT id, kind, upn FROM jobs WHERE status='interrupted' AND finishedAt >= ?`).all(cutoff);
+  for (const j of dead) log('warn', j.upn || '', `job "${j.kind}" (#${j.id}) was interrupted by a restart — it can be retried/resumed`);
+} catch (e) { console.error('interrupted-jobs check failed:', e.message); }
 const auth = new Auth(cfg);
 const graph = new GraphClient(auth, log, cfg);
 const ews = new EwsClient(auth, log, cfg);
@@ -87,7 +112,7 @@ const pst = new PstExporter({ cfg, store, log, bus });
 const setup = new Setup({ cfg, log, configPath: CONFIG_PATH });
 const updater = new Updater({ cfg, log, appRoot: __dirname });
 const exo = new Exo({ cfg, log, bus, auth });
-const exoExport = new ExoExport({ cfg, store, log, bus, auth, ingest: new PstIngest({ cfg, store, log, bus }) });
+const exoExport = new ExoExport({ cfg, store, log, bus, auth, ingest: new PstIngest({ cfg, store, log, bus }), preflight: diskCheck });
 const copyEngine = new CopyEngine({ cfg, store, graph, ews, log, bus });
 const dedupeEngine = new DedupeEngine({ cfg, store, graph, log, bus });
 const copyEmailEngine = new CopyEmailEngine({ cfg, store, graph, ews, engine, log, bus });
@@ -143,7 +168,9 @@ app.get('/session-token.js', (req, res) => {
 });
 app.use('/api', (req, res, next) => {
   const h = req.get('authorization') || '';
-  const t = (h.startsWith('Bearer ') ? h.slice(7) : '') || req.get('x-session-token') || req.query.token;
+  // With allowRemote the token must come via a header only — a ?token= query
+  // leaks into proxy logs, browser history and referrer headers on network paths.
+  const t = (h.startsWith('Bearer ') ? h.slice(7) : '') || req.get('x-session-token') || (cfg.allowRemote === true ? undefined : req.query.token);
   if (t === sessionToken) return next();
   res.status(401).json({ error: 'missing or invalid session token' });
 });
@@ -632,14 +659,8 @@ app.post('/api/backup', wrap(req => {
   if (copyEngine.running || dedupeEngine.running) { const e = new Error('a copy/dedupe job is running — stop it before starting a backup'); e.status = 409; throw e; }
   // Disk-space preflight: refuse to start when the store drive is below the
   // configured reserve (default 10 GB) — never run the disk into the ground.
-  try {
-    const st = fs.statfsSync(cfg.dataDir);
-    const reserve = cfg.diskReserveBytes || 10 * 1024 ** 3;
-    if (st.available < reserve) {
-      const e = new Error(`insufficient disk space: ${(st.available / 2 ** 30).toFixed(1)} GB free, reserve is ${(reserve / 2 ** 30).toFixed(1)} GB — free space or lower diskReserveBytes`);
-      e.status = 507; throw e;
-    }
-  } catch (e) { if (e.status) throw e; /* statfs failure must not block backups */ }
+  const dErr = diskCheck();
+  if (dErr) { dErr.status = 507; throw dErr; }
   const scope = req.body && req.body.scope;
   if (scope != null && scope !== 'archive' && scope !== 'primary') { const e = new Error('invalid scope: only "primary" and "archive" are supported'); e.status = 400; throw e; }
   const provider = req.body && req.body.provider;
@@ -1073,6 +1094,8 @@ app.post('/api/pst', wrap(req => {
   // arrive mid-export are simply picked up by the next run (resume manifest).
   const pupn = req.body && req.body.upn;
   if (pupn && !isValidUpn(pupn)) { const e = new Error('invalid mailbox id'); e.status = 400; throw e; }
+  const pdErr = diskCheck();
+  if (pdErr) { pdErr.status = 507; throw pdErr; }
   let plan = req.body && req.body.plan;
   const scope = req.body && req.body.scope;
   // Scope-only export: one plan part holding the scope's top-level folders
@@ -1321,7 +1344,7 @@ const validateMoveEmailBody = req => {
     }
     if (dst.folderId != null && typeof dst.folderId !== 'string') { const e = new Error('invalid dst.folderId'); e.status = 400; throw e; }
   }
-  return { srcUpn, srcType, dstUpn, target, folderKeys, dst, force: !!(req.body && req.body.force) };
+  return { srcUpn, srcType, dstUpn, target, folderKeys, dst, force: !!(req.body && req.body.force), fullPath: !!(req.body && req.body.fullPath) };
 };
 app.post('/api/move-email', wrap(req => {
   moveEmailGuard();
@@ -1341,7 +1364,7 @@ app.post('/api/move-email/retry', wrap(req => {
   if (!d.srcUpn || !d.target || !Array.isArray(d.folderKeys) || !d.dst) { const e = new Error('job detail is incomplete — cannot retry'); e.status = 400; throw e; }
   return moveEmailEngine.start({
     srcUpn: d.srcUpn, srcType: d.srcType || 'local', dstUpn: d.dstUpn || d.srcUpn, target: d.target,
-    folderKeys: d.folderKeys, dst: d.dst, onlyItems: new Set(failedKeys), retryOf: jobId
+    folderKeys: d.folderKeys, dst: d.dst, onlyItems: new Set(failedKeys), retryOf: jobId, fullPath: !!d.fullPath
   });
 }));
 app.get('/api/move-email/:jobId', wrap(async req => {
@@ -2055,6 +2078,7 @@ app.post('/api/stop/sizes', wrap(() => {
   if (!sizesRunning) return { ok: true, alreadyStopped: true };
   sizesStop = true;
   if (sizesAborter) sizesAborter.abort();
+  exo.kill(); // otherwise the PowerShell child runs on up to exoTimeoutMs
   log('info', '', 'sizes scan stopped by user');
   return { ok: true };
 }));
@@ -2156,6 +2180,14 @@ const host = cfg.host || '127.0.0.1'; // localhost only: this app handles a full
 if (!['127.0.0.1', 'localhost', '::1'].includes(host) && cfg.allowRemote !== true) {
   console.error(`Refusing to bind to non-loopback host "${host}" — set "allowRemote": true in config.json to override (NOT recommended: the dashboard exposes mailbox content).`);
   process.exit(1);
+}
+if (cfg.allowRemote === true) {
+  console.warn('******************************************************************');
+  console.warn('WARNING: allowRemote is ON — the dashboard (full mailbox content!)');
+  console.warn('is reachable from the network. Query-token auth is DISABLED; use');
+  console.warn('the Authorization header only, and prefer binding to loopback.');
+  console.warn('******************************************************************');
+  log('warn', '', 'allowRemote is ON — dashboard exposed to non-loopback clients; ?token= auth disabled');
 }
 
 // Auto-resume: on startup only mailboxes left 'syncing' (process died mid-run) are

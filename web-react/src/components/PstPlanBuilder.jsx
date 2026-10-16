@@ -17,7 +17,7 @@ function buildTree(rows) {
   }
   const sortRec = ns => { ns.sort((a, b) => String(a.name).localeCompare(String(b.name))); ns.forEach(n => sortRec(n.children)); };
   sortRec(roots);
-  return roots;
+  return roots.flatMap(r => r.name === 'Archive root' ? r.children : [r]);
 }
 
 function PlanTreeNode({ node, depth, sel, locked, onToggle, expanded, toggleExp }) {

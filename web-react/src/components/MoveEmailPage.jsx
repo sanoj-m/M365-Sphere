@@ -264,6 +264,7 @@ function MoveEmailSession({ upn, mailboxes, showShared, showGuests, runs, jobs }
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [placement, setPlacement] = useState('folder'); // 'folder' | 'root'
   const [rootName, setRootName] = useState('');
+  const [fullPath, setFullPath] = useState(true);
 
   // Resolve the current destination config into a POST body + human label;
   // null when incomplete.
@@ -301,7 +302,7 @@ function MoveEmailSession({ upn, mailboxes, showShared, showGuests, runs, jobs }
       ? (dst.target === 'live' ? { folderId: dst.liveId } : { scope: dst.localScope, folderId: dst.localId })
       : (dst.target === 'live' ? { folderId: null } : { scope: dst.localScope, folderId: null, name: rootName.trim() });
     setStarting(true); setErr(null);
-    post('/api/move-email', { srcUpn: upn, srcType, dstUpn: dst.dstUpn, target: dst.target, folderKeys: [...selected], dst: body })
+    post('/api/move-email', { srcUpn: upn, srcType, dstUpn: dst.dstUpn, target: dst.target, folderKeys: [...selected], dst: body, fullPath })
       .then(() => setConfirmOpen(false))
       .catch(e => setErr(e.message))
       .finally(() => setStarting(false));
@@ -585,6 +586,12 @@ function MoveEmailSession({ upn, mailboxes, showShared, showGuests, runs, jobs }
             </div>
             {!folderAvail && dst.target === 'live' && (
               <p className="settings-hint">No destination folder picked — the source folders will be created at the mailbox root.</p>
+            )}
+            {srcType === 'live' && dst.target === 'live' && placement === 'root' && (
+              <label className="settings-hint" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                <input type="checkbox" checked={fullPath} onChange={e => setFullPath(e.target.checked)} />
+                Recreate the full source folder path (e.g. <i>parent/project</i>) instead of dropping the picked folders straight onto the root
+              </label>
             )}
           </section>
           <div className="confirm-actions" style={{ padding: '0 18px 16px' }}>

@@ -189,7 +189,10 @@ Runs as a detached `node server.js` process (no service — a Session-0 service
 would break Outlook COM PST export). A WATCHDOG keeps it alive:
 Scheduled Task `M365Sphere-Watchdog` (AtLogon, interactive session) runs
 `scripts/watchdog.ps1`, which every 30 s starts `server.js` if no such process
-exists (log: `data/watchdog.log`). Deliberate stop: create
+exists (with stdout/stderr → `data/server-out.log`/`server-err.log`) and
+restarts it when the API stops answering for 3 consecutive checks
+(log: `data/watchdog.log`). The task MUST have ExecutionTimeLimit 0 —
+(re)register with `scripts/register-watchdog.ps1`. Deliberate stop: create
 `data/watchdog.pause` (delete to re-arm); remove entirely:
 `Unregister-ScheduledTask -TaskName 'M365Sphere-Watchdog'`. Note: in-flight
 jobs (dedupe etc.) are still marked 'interrupted' on any restart — the
@@ -270,8 +273,40 @@ or accessibility. No new files, wrappers, or abstractions the task doesn't need.
 
 ## Current state / recent changes (refresh each session)
 
-_Updated 2026-10-15. Keep to ~10 lines; delete entries older than ~2 weeks._
+_Updated 2026-10-16. Keep to ~10 lines; delete entries older than ~2 weeks._
 
+- Full audit 2026-10-16 (plan `docs/audit-plan.md`, report
+  `docs/audit-2026-10-16.md`) — all fixes landed, activate on next restart:
+  updater now REQUIRES a `<zip>.sha256` release sidecar (build-installer.ps1
+  emits it; old releases fail update checks by design) and update-apply.bat is
+  an allow-list mirror that always relaunches; watchdog rewritten
+  (stdout/stderr → data/server-out|err.log, API 3-strike healthcheck) and
+  re-registered via `scripts/register-watchdog.ps1` (ExecutionTimeLimit 0 —
+  the 72 h default had silently killed it Oct 12); server.js logs a
+  `process.on('exit')` marker + startup warns about jobs interrupted in the
+  last 24 h (TasksPanel banner too); `/api/stop/sizes` now kills the EXO PS
+  child; EXO PST downloads abortable mid-file; disk preflight shared by
+  backup/PST/EXO-chunk. MOVE/COPY NO-LOSS: batch-local subject+receivedAt keys
+  no longer count as 'verified' in moveemail/copyemail (retire-without-upload
+  bug — only Message-ID batch adds are trusted); move-email live→live gains
+  `fullPath:true` (body flag + UI checkbox, default on for root placement) to
+  recreate the FULL source path under a root destination. engine.js:
+  folders.hiddenCountAt column, hidden counts expire after 30 d (listing-lag
+  revalidation). pstingest MIME boundary is deterministic (sha256 idempotency
+  restored). exoexport plans a catch-all `nosent` chunk per mailbox. Dedupe
+  local fuzzy apply fingerprint-verifies before moving. store.js adds
+  `items(upn,sha256)` index. allowRemote: header-only token + loud warning.
+  safeName blocks Windows reserved names/trailing dots; preview.js scope
+  whitelist.
+- Home dashboard redesign (2026-10-16, `App.jsx`/`styles.css`): primary
+  email-tools navbar above a compact backup workflow; notification bell/panel
+  for connection, live-update, auto-resume and updater alerts (update apply,
+  outside-click/Escape close + focus return). The header Reveal gets
+  `notifications-open` z-index only while open so the panel stays above cards.
+  Metric buttons have explicit `Filter on/off`, `All shown/Show all`, and
+  `Included in list/Hidden from list` badges; running jobs render parsed routes
+  and outcome counts instead of raw JSON. Responsive dark/light layouts verified
+  at 1600/390/375 px; mobile navbar leaves clearance for MasterStopFab.
 - NSIS installer (`installer/`): `build-installer.ps1` builds web-react, stages a
   data/secret-free app tree, compiles `m365-sphere.nsi` → `M365Sphere-Setup.exe`,
   and zips the stage → `M365Sphere-update.zip` (GitHub Release asset for
@@ -311,9 +346,9 @@ _Updated 2026-10-15. Keep to ~10 lines; delete entries older than ~2 weeks._
   stages over the app dir EXCLUDING data/node_modules/pst-export/pst-import/
   tools/.git + config.json/Uninstall.exe/*.log, runs npm install if
   package-lock changed, relaunches `Start-M365-Sphere.bat`, logs to
-  `data/update-apply.log`. UI: header chip ("Update available — vX") with
-  confirm → apply → poll-until-reload (App.jsx), Settings → "Check for
-  updates". Release flow: bump package.json version → build-installer.ps1 →
+  `data/update-apply.log`. UI: notification-panel update item ("Update
+  available — vX") with confirm → apply → poll-until-reload (App.jsx), Settings
+  → "Check for updates". Release flow: bump package.json version → build-installer.ps1 →
   GitHub Release tagged `v<ver>` with `M365Sphere-update.zip` attached.
 
 - "Move email" page (`web-react/src/components/MoveEmailPage.jsx` at

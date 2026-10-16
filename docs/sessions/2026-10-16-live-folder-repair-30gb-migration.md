@@ -84,3 +84,23 @@ archive mailboxes.
   1962/1964 repair).
 - The Graph listing inconsistency may warrant a verification pass inside the
   engine itself (re-list after a move before declaring a folder done).
+
+## Addendum — full audit + fix marathon (same day)
+
+- Completed all 5 audit phases (`docs/audit-plan.md` → report
+  `docs/audit-2026-10-16.md`). Headline: the watchdog task had the default
+  72 h ExecutionTimeLimit and was silently dead since Oct 12 (root cause of
+  the day's two unobserved server deaths); watchdog rewritten + re-registered
+  (`scripts/register-watchdog.ps1`), crash evidence now always captured.
+- Fixed same-day: updater SHA-256 sidecar + allow-list apply, move/copy-email
+  batch-skip collision (the migration's missing-items bug), move-email
+  `fullPath` option, hiddenCount 30-day revalidation, deterministic pstingest
+  boundaries, EXO no-sent catch-all chunk, plan 5 s flush, dedupe local fuzzy
+  fingerprint-verify, sha256 index, stop/sizes EXO kill, EXO download abort,
+  disk-preflight reuse, interrupted-job banner, frontend convention fixes,
+  installer version from package.json + Node 22 hard stop.
+- Migration status at commit time: 10/12 projects complete; N25 MAA Penthouse
+  + 2020 ASGC - MAA 1+2 in progress via the multi-pass driver; the
+  retired-skip repair (`scripts/move-pc2-verify-skips.js`, gitignored —
+  tenant-specific) is restoring every batch-skip casualty from Deleted Items
+  with fingerprint verification + EWS re-upload (dates preserved).

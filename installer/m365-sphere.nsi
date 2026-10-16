@@ -4,7 +4,9 @@
 
 Unicode true
 !define APPNAME "M365-Sphere"
-!define APPVER "1.0.0"
+!ifndef APPVER
+  !define APPVER "1.0.0"
+!endif
 !define PUBLISHER "M365-Sphere"
 !define OUTFILE "M365Sphere-Setup.exe"
 
@@ -80,11 +82,14 @@ Function EnsureNode
     ${EndIf}
   ${EndIf}
   DetailPrint "Found node at $NodeExe"
-  ; Warn (don't block) on Node < 22.
+  ; Hard stop on Node < 22: npm install runs with --ignore-scripts and relies on
+  ; the better-sqlite3 N-API prebuilt, which only exists for Node 22+.
   nsExec::ExecToStack '"$NodeExe" -e "process.exit(+process.versions.node.split(String.fromCharCode(46))[0] < 22 ? 1 : 0)"'
   Pop $0
   ${If} $0 != "0"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "The installed Node.js is older than v22. ${APPNAME} requires Node.js 22 LTS or newer — please upgrade from https://nodejs.org after the install."
+    MessageBox MB_OK|MB_ICONSTOP \
+      "The installed Node.js is older than v22. ${APPNAME} requires Node.js 22 LTS or newer — the npm install during setup would fail without it.$\r$\n$\r$\nUpgrade from https://nodejs.org and run this installer again."
+    Abort "Node.js 22 LTS or newer is required."
   ${EndIf}
 FunctionEnd
 

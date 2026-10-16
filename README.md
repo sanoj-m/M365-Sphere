@@ -74,9 +74,9 @@ export, and repair treat every item identically regardless of which API delivere
 **End users (installer):** run `installer\M365Sphere-Setup.exe` — it installs
 Node.js if needed, installs all dependencies, and opens the dashboard. Rebuild
 it with `powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1`.
-Installed instances auto-update from the public GitHub repo's Releases (header
-chip when a new version is published; daily + manual checks; backups, config
-and PSTs are never touched by an update).
+Installed instances auto-update from the public GitHub repo's Releases
+(notification bell/panel when a new version is published; daily + manual checks;
+backups, config and PSTs are never touched by an update).
 
 **From source:**
 
@@ -186,6 +186,11 @@ imported/pending, rebuilt counts, a live progress bar, per-PST breakdown, and a
 
 React 18 + Vite SPA. Highlights:
 
+- **Home dashboard**: primary email-tools navbar above a compact backup workflow;
+  notification bell/panel for connection, live-update, auto-resume and app-update
+  alerts (including update apply); explicit metric states (`Filter on/off`,
+  `All shown/Show all`, and Shared/Guests list visibility); readable running-job
+  routes, outcome counts and progress instead of raw job JSON.
 - **Mailbox table**: live search, sortable columns, multi-select actions, status
   chips, type classification (user/shared/guest), per-row Backup/Archive/PST.
 - **Mailbox page** (`/?mailbox=<upn>`): backup explorer (folder tree → item list →

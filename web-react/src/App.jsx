@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, AlertCircle, ArrowRight, CheckCircle2, Clock3, Copy, GitCompare, Globe, HardDrive, Mail, MoveRight, ScanLine, Settings, Square, User, Users } from 'lucide-react';
+import { Activity, AlertCircle, ArrowRight, Bell, Check, CheckCircle2, Clock3, Copy, Download, Eye, EyeOff, Filter, GitCompare, Globe, HardDrive, Mail, MoveRight, ScanLine, Settings, Square, User, Users, X } from 'lucide-react';
 import { api, post, del } from './api.js';
 import { cacheGet, cacheSet, cacheClearAll } from './cache.js';
 import { useLive } from './live.jsx';
@@ -17,11 +17,15 @@ import StorageManager from './components/StorageManager.jsx';
 import TasksPanel from './components/TasksPanel.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 
-function StatCard({ n, label, tone, active, dimmed, stateText, onClick, icon: Icon, featured }) {
+function StatCard({ n, label, tone, active, meta, kind = 'filter', onClick, icon: Icon, featured }) {
+  const statusText = kind === 'visibility'
+    ? (active ? 'Included in list' : 'Hidden from list')
+    : kind === 'all' ? (active ? 'All shown' : 'Show all') : (active ? 'Filter on' : 'Filter off');
+  const StatusIcon = kind === 'visibility' ? (active ? Eye : EyeOff) : (active ? Check : Filter);
   return (
     <button
       type="button"
-      className={`card stat ${tone || ''}${active ? ' active' : ''}${dimmed ? ' dimmed' : ''}${featured ? ' featured' : ''}`}
+      className={`card stat ${tone || ''}${active ? ' active' : ''}${featured ? ' featured' : ''}`}
       aria-pressed={active}
       onClick={onClick}
     >
@@ -29,9 +33,10 @@ function StatCard({ n, label, tone, active, dimmed, stateText, onClick, icon: Ic
         <span className="stat-label">{label}</span>
         {Icon && <span className="stat-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>}
       </span>
+      <span className={`stat-state ${active ? 'on' : 'off'}`}><StatusIcon size={11} strokeWidth={2} aria-hidden="true" />{statusText}</span>
       <span className="stat-bottom">
         <span className="n">{n}</span>
-        {stateText ? <span className="state">{stateText}</span> : null}
+        {meta ? <span className="stat-meta">{meta}</span> : null}
       </span>
     </button>
   );
@@ -65,6 +70,7 @@ export default function App() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [logTab, setLogTab] = useState('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
   const applyUpdate = async () => {
     const u = status && status.update;
@@ -85,8 +91,27 @@ export default function App() {
   }, [theme]);
   const [logOpen, setLogOpen] = useState(() => cacheGet('logOpen', true));
   const logRef = useRef(null);
+  const notificationRef = useRef(null);
+  const notificationButtonRef = useRef(null);
   const live = useLive();
   const detailModalRef = useModal(useCallback(() => setDetail(null), []));
+  useEffect(() => {
+    if (!notificationsOpen) return;
+    const onPointerDown = e => {
+      if (notificationRef.current && !notificationRef.current.contains(e.target)) setNotificationsOpen(false);
+    };
+    const onKeyDown = e => {
+      if (e.key !== 'Escape') return;
+      setNotificationsOpen(false);
+      if (notificationButtonRef.current) notificationButtonRef.current.focus();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [notificationsOpen]);
 
   const pushLog = useCallback(e => setLogs(l => [...l.slice(-500), e]), []);
   const clearLogs = useCallback(async () => {
@@ -228,11 +253,14 @@ export default function App() {
   const jobs = status ? status.jobs.filter(j => j.status === 'running') : [];
   const pstJob = jobs.find(j => j.kind === 'pst') || null;
   const taskCount = jobs.length + ((status && status.fixTasks) || []).filter(t => t.status === 'queued' || t.status === 'waiting').length;
+  const notificationCount = (live && !live.connected ? 1 : 0)
+    + (status && status.autoResumeSuppressed ? 1 : 0)
+    + (status && status.update && status.update.latest ? 1 : 0);
   return (
     <>
-      <Reveal index={0}>
+      <Reveal index={0} className={notificationsOpen ? 'notifications-open' : ''}>
         <header className="dashboard-header">
-          <div className="header-top">
+          <div className="navbar">
             <a className="brand" href="/" title="Go to homepage">
               <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />
               <div className="brand-copy">
@@ -240,78 +268,117 @@ export default function App() {
                 <span className="header-sub">Mailbox backup, verification and PST export for Microsoft 365.</span>
               </div>
             </a>
-            <div className="header-status">
+            <nav className="main-nav" aria-label="Email tools">
+              <button type="button" className="nav-action" title="Walk every mailbox's folders and re-count the emails on the server (no download) — makes the 'X / Y emails' totals accurate before backing up" disabled={busy || (status && (status.scanRunning || status.running))} onClick={() => startScan()}>
+                <ScanLine size={16} aria-hidden="true" /><span>Scan counts</span>
+              </button>
+              <a className="nav-action" href="/?compare=" title="Open the side-by-side compare page — local backup on the left, live mailbox on the right, copy/move emails between them"><GitCompare size={16} aria-hidden="true" /><span>Compare</span></a>
+              <a className="nav-action" href="/?dedupe" title="Find and move duplicate emails aside — in the local backup store or the live online mailbox"><Copy size={16} aria-hidden="true" /><span>Dedupe</span></a>
+              <a className="nav-action" href="/?copyemail" title="Copy backed-up folders into a live mailbox folder or another local backup — copy-only, duplicates are skipped"><Copy size={16} aria-hidden="true" /><span>Copy email</span></a>
+              <a className="nav-action" href="/?moveemail" title="Move backed-up or live folders into a live mailbox folder — source is removed only after the destination copy is verified"><MoveRight size={16} aria-hidden="true" /><span>Move email</span></a>
+            </nav>
+            <div className="navbar-actions">
               {status && status.configured && (
-                <span className="conn">
-                  <span className="dot" />
-                  Connected — {status.tenant}
-                  {status.archiveGranted ? <span className="archive-flag">· archive granted</span> : ''}
+                <span className="connection-status" title={`Connected — ${status.tenant}${status.archiveGranted ? ' · archive granted' : ''}`}>
+                  <span className="dot" /><span>Connected</span>
                 </span>
               )}
-              {live && !live.connected && (
-                <span className="conn conn-warn">
-                  <span className="dot" />
-                  Live updates paused — reconnecting…
-                </span>
-              )}
-              {status && status.autoResumeSuppressed && (
-                <span className="conn conn-warn" title="A manual Stop was used. Incomplete mailboxes will not auto-resume until you start a backup manually.">
-                  <span className="dot" />
-                  Auto-resume off — stopped manually
-                </span>
-              )}
-              {status && status.update && status.update.latest && (
-                <button className="conn conn-update" disabled={updating || status.update.status === 'downloading' || status.update.status === 'applying'}
-                  title={status.update.latest.notes || 'A new version is available on GitHub'}
-                  onClick={applyUpdate}>
-                  <span className="dot" />
-                  {updating || status.update.status === 'applying' ? 'Updating…'
-                    : status.update.status === 'downloading' ? 'Downloading update…'
-                    : `Update available — v${status.update.latest.version}`}
+              <div className="notification-root" ref={notificationRef}>
+                <button
+                  ref={notificationButtonRef}
+                  type="button"
+                  className="notification-button"
+                  aria-label={`Notifications${notificationCount ? `, ${notificationCount} active ${notificationCount === 1 ? 'alert' : 'alerts'}` : ''}`}
+                  aria-expanded={notificationsOpen}
+                  aria-controls="dashboard-notifications"
+                  onClick={() => setNotificationsOpen(v => !v)}
+                >
+                  <Bell size={18} strokeWidth={1.8} aria-hidden="true" />
+                  {notificationCount > 0 && <span className="notification-badge" aria-hidden="true">{notificationCount}</span>}
                 </button>
-              )}
+                {notificationsOpen && (
+                  <section className="notification-panel" id="dashboard-notifications" aria-label="Notifications">
+                    <div className="notification-head">
+                      <div>
+                        <h2>Notifications</h2>
+                        <span>{notificationCount ? `${notificationCount} active ${notificationCount === 1 ? 'alert' : 'alerts'}` : 'All systems normal'}</span>
+                      </div>
+                      <button type="button" className="notification-close" aria-label="Close notifications" onClick={() => setNotificationsOpen(false)}><X size={16} aria-hidden="true" /></button>
+                    </div>
+                    <div className="notification-list">
+                      {status && status.configured && (
+                        <div className="notification-item">
+                          <span className="notification-item-icon success" aria-hidden="true"><CheckCircle2 size={17} /></span>
+                          <div className="notification-content">
+                            <strong>Connected to {status.tenant}</strong>
+                            <p>Microsoft 365 access is active{status.archiveGranted ? ' · Archive access granted' : ''}.</p>
+                          </div>
+                        </div>
+                      )}
+                      {live && !live.connected && (
+                        <div className="notification-item">
+                          <span className="notification-item-icon warn" aria-hidden="true"><AlertCircle size={17} /></span>
+                          <div className="notification-content">
+                            <strong>Live updates paused</strong>
+                            <p>Reconnecting to the live event stream. Background jobs continue normally.</p>
+                          </div>
+                        </div>
+                      )}
+                      {status && status.autoResumeSuppressed && (
+                        <div className="notification-item">
+                          <span className="notification-item-icon warn" aria-hidden="true"><AlertCircle size={17} /></span>
+                          <div className="notification-content">
+                            <strong>Auto-resume is off</strong>
+                            <p>Incomplete mailboxes will not resume automatically after a manual stop.</p>
+                          </div>
+                        </div>
+                      )}
+                      {status && status.update && status.update.latest && (
+                        <div className="notification-item">
+                          <span className="notification-item-icon info" aria-hidden="true"><Download size={17} /></span>
+                          <div className="notification-content">
+                            <strong>{updating || status.update.status === 'applying' ? 'Updating M365Sphere' : status.update.status === 'downloading' ? 'Downloading update' : `Update available — v${status.update.latest.version}`}</strong>
+                            <p>{updating || status.update.status === 'applying' || status.update.status === 'downloading' ? 'The app will restart when the update is applied.' : `Version ${status.update.latest.version} is ready to install.`}</p>
+                            <button type="button" className="btn small primary" disabled={updating || status.update.status === 'downloading' || status.update.status === 'applying'} title={status.update.latest.notes || 'Install the latest version'} onClick={() => { setNotificationsOpen(false); applyUpdate(); }}>
+                              {updating || status.update.status === 'applying' ? 'Updating…' : status.update.status === 'downloading' ? 'Downloading…' : 'Update now'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {!status && <div className="notification-empty">Checking system status…</div>}
+                      {status && !status.configured && !notificationCount && <div className="notification-empty">No new notifications.</div>}
+                    </div>
+                  </section>
+                )}
+              </div>
+              <button type="button" className="btn ghost settings-btn" onClick={() => setSettingsOpen(true)}><Settings size={16} aria-hidden="true" /><span>Settings</span></button>
             </div>
           </div>
-          <div className="actions">
-            <div className="action-row">
-              <span className="action-label">Backup workflow</span>
-              <div className="pipeline" role="group" aria-label="Backup workflow steps">
-                <button className={`step${nextStep === 1 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/discover')}>
-                  <span className="step-n">1</span><span className="step-label">Discover</span>
-                </button>
-                <button className={`step${nextStep === 2 ? ' suggested' : ''}`} title="Authoritative sizes from Exchange Online, plus the API-accessible archive portion (EWS) for archive mailboxes" disabled={busy || (status && status.sizesRunning)} onClick={() => act('/api/sizes')}>
-                  <span className="step-n">2</span><span className="step-label">Fetch Sizes</span>
-                </button>
-                <button className={`step${nextStep === 3 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/verify')}>
-                  <span className="step-n">3</span><span className="step-label">Verify All</span>
-                </button>
-                <button className={`step${nextStep === 4 ? ' suggested' : ''}`} disabled={busy || (status && status.pstRunning)} onClick={() => act('/api/pst')}>
-                  <span className="step-n">4</span><span className="step-label">Export PST (All)</span>
-                </button>
-              </div>
+          <div className="workflow-bar">
+            <span className="action-label">Backup workflow</span>
+            <div className="pipeline" role="group" aria-label="Backup workflow steps">
+              <button className={`step${nextStep === 1 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/discover')}>
+                <span className="step-n">1</span><span className="step-label">Discover</span>
+              </button>
+              <button className={`step${nextStep === 2 ? ' suggested' : ''}`} title="Authoritative sizes from Exchange Online, plus the API-accessible archive portion (EWS) for archive mailboxes" disabled={busy || (status && status.sizesRunning)} onClick={() => act('/api/sizes')}>
+                <span className="step-n">2</span><span className="step-label">Fetch Sizes</span>
+              </button>
+              <button className={`step${nextStep === 3 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/verify')}>
+                <span className="step-n">3</span><span className="step-label">Verify All</span>
+              </button>
+              <button className={`step${nextStep === 4 ? ' suggested' : ''}`} disabled={busy || (status && status.pstRunning)} onClick={() => act('/api/pst')}>
+                <span className="step-n">4</span><span className="step-label">Export PST (All)</span>
+              </button>
             </div>
-            <div className="action-row action-row-tools">
-              <span className="action-label">Email tools</span>
-              <div className="tool-actions">
-                <button className="btn ghost" title="Walk every mailbox's folders and re-count the emails on the server (no download) — makes the 'X / Y emails' totals accurate before backing up" disabled={busy || (status && (status.scanRunning || status.running))} onClick={() => startScan()}>
-                  <ScanLine size={15} aria-hidden="true" />Scan counts
-                </button>
-                <a className="btn ghost" href="/?compare=" title="Open the side-by-side compare page — local backup on the left, live mailbox on the right, copy/move emails between them"><GitCompare size={15} aria-hidden="true" />Compare</a>
-                <a className="btn ghost" href="/?dedupe" title="Find and move duplicate emails aside — in the local backup store or the live online mailbox"><Copy size={15} aria-hidden="true" />Dedupe</a>
-                <a className="btn ghost" href="/?copyemail" title="Copy backed-up folders into a live mailbox folder or another local backup — copy-only, duplicates are skipped"><Copy size={15} aria-hidden="true" />Copy email</a>
-                <a className="btn ghost" href="/?moveemail" title="Move backed-up or live folders into a live mailbox folder — source is removed only after the destination copy is verified"><MoveRight size={15} aria-hidden="true" />Move email</a>
+            {status && (status.running || status.sizesRunning || status.scanRunning) && (
+              <div className="workflow-actions">
+                <div className="actions-group danger-zone" role="group" aria-label="Stop controls">
+                  <button className="btn danger" disabled={busy} onClick={() => act('/api/stop')}><Square size={11} fill="currentColor" aria-hidden="true" />Stop</button>
+                  {status.running && <button className="btn small" disabled={busy} title="Stop syncing the primary mailbox only — the archive sync continues" onClick={() => post('/api/stop', { scope: 'primary' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop primary</button>}
+                  {status.running && <button className="btn small" disabled={busy} title="Stop syncing online archives only — the primary sync continues" onClick={() => post('/api/stop', { scope: 'archive' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop archive</button>}
+                </div>
               </div>
-              <div className="action-tail">
-                {status && (status.running || status.sizesRunning || status.scanRunning) && (
-                  <div className="actions-group danger-zone" role="group" aria-label="Stop controls">
-                    <button className="btn danger" disabled={busy} onClick={() => act('/api/stop')}><Square size={11} fill="currentColor" aria-hidden="true" />Stop</button>
-                    {status.running && <button className="btn small" disabled={busy} title="Stop syncing the primary mailbox only — the archive sync continues" onClick={() => post('/api/stop', { scope: 'primary' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop primary</button>}
-                    {status.running && <button className="btn small" disabled={busy} title="Stop syncing online archives only — the primary sync continues" onClick={() => post('/api/stop', { scope: 'archive' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop archive</button>}
-                  </div>
-                )}
-                <button className="btn ghost settings-btn" onClick={() => setSettingsOpen(true)}><Settings size={15} aria-hidden="true" />Settings</button>
-              </div>
-            </div>
+            )}
           </div>
           {status && status.exoSignIn && (
             <div className="exo-signin" role="status">
@@ -330,14 +397,14 @@ export default function App() {
             <span>Select a metric to filter the mailbox list</span>
           </div>
           <div className="stats">
-            <StatCard n={a.total} label="Total mailboxes" icon={Mail} featured active={!statFilter} onClick={() => setStatFilter(null)} />
+            <StatCard n={a.total} label="Total mailboxes" icon={Mail} kind="all" featured active={!statFilter} onClick={() => setStatFilter(null)} />
             <StatCard n={licensedCount} label="Licensed" icon={User} active={statFilter === 'user'} onClick={() => toggleFilter('user')} />
-            <StatCard n={sharedCount} label="Shared" icon={Users} tone="info" active={showShared} dimmed={!showShared} stateText={showShared ? 'shown' : 'hidden'} onClick={() => setShowShared(v => !v)} />
-            <StatCard n={guestCount} label="Guests" icon={Globe} tone="warn" active={showGuests} dimmed={!showGuests} stateText={showGuests ? 'shown' : 'hidden'} onClick={() => setShowGuests(v => !v)} />
+            <StatCard n={sharedCount} label="Shared" icon={Users} tone="info" kind="visibility" active={showShared} onClick={() => setShowShared(v => !v)} />
+            <StatCard n={guestCount} label="Guests" icon={Globe} tone="warn" kind="visibility" active={showGuests} onClick={() => setShowGuests(v => !v)} />
             <StatCard n={a.done} label="Fully backed up" icon={CheckCircle2} tone="ok" active={statFilter === 'done'} onClick={() => toggleFilter('done')} />
             <StatCard n={a.partial} label="Partial (pending)" icon={Clock3} tone="warn" active={statFilter === 'partial'} onClick={() => toggleFilter('partial')} />
             <StatCard n={a.errors} label="Errors" icon={AlertCircle} tone={a.errors ? 'bad' : 'ok'} active={statFilter === 'error'} onClick={() => toggleFilter('error')} />
-            <StatCard n={fmtBytes(a.primaryBytes + a.archiveBytes)} label="Backed up" icon={HardDrive} featured stateText="Primary + archive" active={statFilter === 'bytes'} onClick={() => toggleFilter('bytes')} />
+            <StatCard n={fmtBytes(a.primaryBytes + a.archiveBytes)} label="Backed up" icon={HardDrive} featured meta="Primary + archive" active={statFilter === 'bytes'} onClick={() => toggleFilter('bytes')} />
           </div>
         </section>
       </Reveal>

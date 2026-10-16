@@ -1,11 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { del, post } from '../api.js';
 import { dialog } from '../dialog.jsx';
+import { fmtBytes, fmtTime } from '../format.js';
 
 const ACTIVE = ['queued', 'waiting', 'verify', 'backup'];
 const upnOf = s => { const m = /[\w.+-]+@[\w-]+\.[\w.]+/.exec(String(s || '')); return m ? m[0] : null; };
 const fixLabel = { queued: 'Queued', waiting: 'Waiting for engine…', verify: 'Verifying…', backup: 'Backing up…' };
 const stopPath = { pst: '/api/stop/pst', backup: '/api/stop/backup', verify: '/api/stop/backup', sizes: '/api/stop/sizes', scan: '/api/stop/scan', copy: '/api/stop/copy', dedupe: '/api/stop/dedupe', exoexport: '/api/stop/exo-export' };
+
+const parseDetail = d => {
+  if (!d || typeof d !== 'string') return null;
+  try { const o = JSON.parse(d); return o && typeof o === 'object' ? o : null; } catch { return null; }
+};
 
 const elapsed = iso => {
   if (!iso) return '';
@@ -22,7 +28,7 @@ function TaskLogs({ lines }) {
         <div key={i} className={'log-line ' + e.level}>
           <span className="log-dot" aria-hidden="true" />
           <span className="log-body">
-            <span className="log-ts">{String(e.ts || '').slice(11, 19)}</span>
+            <span className="log-ts">{fmtTime(e.ts)}</span>
             <span className="log-msg"> {e.message}</span>
           </span>
         </div>
@@ -59,6 +65,14 @@ export default function TasksPanel({ status, logs }) {
 
   const cancel = id => del('/api/tasks/' + id).catch(e => dialog.notify('Cancel failed: ' + e.message, 'error'));
 
+  // Jobs marked 'interrupted' by the startup reconciliation (server restart)
+  // in the last 24 h — dismissible banner so a dead job doesn't go unnoticed.
+  const interrupted = status
+    ? status.jobs.filter(j => j.status === 'interrupted' && Date.now() - new Date(j.finishedAt || 0).getTime() < 24 * 3600 * 1000)
+    : [];
+  const interruptedKey = interrupted.map(j => j.id).join(',');
+  const [dismissedKey, setDismissedKey] = useState(null);
+
   const liveMove = (status && status.liveMove) || null;
   const liveMoveActive = liveMove && liveMove.running;
   const liveMovePct = liveMove && liveMove.itemsTotal ? Math.round(100 * liveMove.itemsDone / liveMove.itemsTotal) : 0;
@@ -66,6 +80,20 @@ export default function TasksPanel({ status, logs }) {
   const empty = !jobs.length && !activeFix.length && !finishedFix.length && !exoExport.running && !liveMoveActive;
   return (
     <div className="logbox taskspanel">
+      {interrupted.length > 0 && dismissedKey !== interruptedKey && (
+        <div className="task-card">
+          <div className="task-head">
+            <b>Interrupted by a restart</b>
+            <span className="spacer" />
+            <button className="btn small" onClick={() => setDismissedKey(interruptedKey)}>Dismiss</button>
+          </div>
+          {interrupted.map(j => (
+            <div key={j.id} className="muted task-detail">
+              {j.kind} #{j.id}{j.upn ? ` — ${j.upn}` : ''} · interrupted by a restart — can be retried/resumed
+            </div>
+          ))}
+        </div>
+      )}
       {empty && <div className="log-empty">No running tasks — start a backup, verify, PST export or gap fix to see live progress here.</div>}
 
       {liveMove && (liveMove.running || liveMove.state === 'done' || liveMove.state === 'error') && (
@@ -117,6 +145,9 @@ export default function TasksPanel({ status, logs }) {
         const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
         const upn = upnOf(j.detail) || (j.kind === 'pst' && pstDetail.current && pstDetail.current.upn);
         const isPst = j.kind === 'pst';
+        const d = parseDetail(j.detail);
+        const isXfer = d && d.srcUpn;
+        const dstLabel = d && typeof d.dstLabel === 'string' && d.dstLabel.length <= 60 && !d.dstLabel.endsWith('=') ? d.dstLabel : null;
         return (
           <div className="task-card" key={'job-' + j.id}>
             <div className="task-head">
@@ -125,10 +156,26 @@ export default function TasksPanel({ status, logs }) {
               <span className="spacer" />
               <StopBtn kind={j.kind} label={j.kind} />
             </div>
-            <div className="muted task-detail">
-              {j.done}/{j.total}{j.total ? ` (${pct}%)` : ''} {j.detail || ''}
-              {j.startedAt ? ` · started ${elapsed(j.startedAt)} ago` : ''}
-            </div>
+            {isXfer ? (
+              <>
+                <div className="task-detail">{d.srcUpn} <span className="muted">({d.srcType})</span> → {d.dstUpn} <span className="muted">({d.target})</span>{dstLabel ? ` · ${dstLabel}` : ''}</div>
+                <div className="muted task-detail">
+                  {j.done}/{j.total}{j.total ? ` (${pct}%)` : ''} — {Number(d.done) || 0} {j.kind === 'copy-email' ? 'copied' : 'moved'} · {Number(d.skipped) || 0} skipped · {Number(d.failed) || 0} failed
+                  {d.bytesCopied ? ` · ${fmtBytes(d.bytesCopied)}${d.bytesTotal ? ` / ${fmtBytes(d.bytesTotal)}` : ''}` : ''}
+                  {j.startedAt ? ` · started ${elapsed(j.startedAt)} ago` : ''}
+                </div>
+              </>
+            ) : d && d.undoOf != null ? (
+              <div className="muted task-detail">
+                undoing job {d.undoOf} — {j.done}/{j.total} · {Number(d.restored) || 0} restored · {Number(d.cleaned) || 0} cleaned · {Number(d.failed) || 0} failed
+                {j.startedAt ? ` · started ${elapsed(j.startedAt)} ago` : ''}
+              </div>
+            ) : (
+              <div className="muted task-detail">
+                {j.done}/{j.total}{j.total ? ` (${pct}%)` : ''} {j.detail || ''}
+                {j.startedAt ? ` · started ${elapsed(j.startedAt)} ago` : ''}
+              </div>
+            )}
             {j.total ? <div className="bar task-bar"><div className="fill" style={{ width: pct + '%' }} /></div> : null}
             {isPst && pstDetail.current && (
               <div className="muted task-detail mono">
