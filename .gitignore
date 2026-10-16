@@ -11,6 +11,7 @@ scripts/*.out
 installer/stage/
 installer/*.exe
 installer/*.zip
+installer/release-key.pem
 docs/user1-archive-folders.txt
 scripts/compare-archive-11projects.js
 scripts/fix-kvbids-root-folders.js

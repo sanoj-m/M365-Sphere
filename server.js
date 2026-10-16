@@ -1006,7 +1006,7 @@ app.post('/api/verify', wrap(req => {
     pumpFixTasks();
     return { ok: true, queued: true, task: t };
   }
-  return engine.runVerify(vupn);
+  return engine.runVerify(vupn, { full: !!(req.body && req.body.full) });
 }));
 
 // ---------- Background task queue ----------
@@ -1493,6 +1493,8 @@ const normMsgId = s => { const v = String(s || '').replace(/[<>]/g, '').trim().t
 // is shared with the copy-email engine — imported from lib/dedupe.js.
 // One compare transfer at a time, with cooperative cancellation (POST /api/stop/compare).
 let compareRunning = false, compareStop = false;
+let compareLastProgress = 0; // last time a running compare action reported progress
+const touchCompare = () => { compareLastProgress = Date.now(); };
 // Live progress of the running (or last finished) compare action — kept after
 // completion so a late poll still returns the final state.
 let compareProg = null; // { running, kind, label, src, dst, startedAt, foldersDone, foldersTotal, itemsDone, itemsTotal, done, skipped, failed, currentFolder, stopped }
@@ -1500,13 +1502,24 @@ const sideName = (upn, name, tag) => (tag ? `${upn} (${tag})` : upn) + (name ? `
 const compareGuard = fn => wrap(async req => {
   if (copyEngine.running || copyEmailEngine.running || moveEmailEngine.running) { const e = new Error('a copy job is running — stop it first'); e.status = 409; throw e; }
   if (compareRunning) { const e = new Error('a compare transfer is already running'); e.status = 409; throw e; }
-  compareRunning = true; compareStop = false;
+  compareRunning = true; compareStop = false; touchCompare();
   try { return await fn(req); } finally {
     compareRunning = false;
     if (compareProg) { compareProg.running = false; compareProg.stopped = compareStop; }
   }
 });
 app.get('/api/compare/progress', wrap(async req => compareProg || { running: false }));
+// Stall watchdog: a running compare transfer that reports no progress for
+// 30 min is treated as wedged (pathological retry/hang) — request the same
+// cooperative stop POST /api/stop/compare sets so the loop unwinds and the
+// guard is released. Checked every minute; progress is touched per item.
+setInterval(() => {
+  if (!compareRunning || !compareLastProgress) return;
+  if (Date.now() - compareLastProgress > 30 * 60 * 1000 && !compareStop) {
+    log('warn', '', `compare transfer stalled for >30 min without progress (kind=${compareProg && compareProg.kind}) — requesting stop`);
+    compareStop = true;
+  }
+}, 60 * 1000).unref();
 // Persistent compare transfer history (one row per completed action).
 const logCompare = r => { try { store.addCompareLog(r); } catch (e) { console.error('compare_log insert failed:', e.message); } };
 app.get('/api/compare/history', wrap(async req => {
@@ -1544,7 +1557,7 @@ app.post('/api/compare/transfer', compareGuard(async req => {
     itemsDone: 0, itemsTotal: items.length, done: 0, skipped: 0, failed: 0,
     currentFolder: '', stopped: false
   };
-  const syncProg = () => Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed });
+  const syncProg = () => { touchCompare(); Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed }); };
   if (direction === 'toLive') {
     // Uploads go through EWS CreateItem (Graph MIME import creates drafts with
     // the import date and cannot be fixed via PATCH); convert the REST folder id.
@@ -1702,7 +1715,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
   let done = 0, skipped = 0, failed = 0, folders = 0;
   const noteErr = e => {
     failed++; if (errors.length < 10) errors.push(String(e.message || e).slice(0, 300));
-    if (compareProg) Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed });
+    if (compareProg) { touchCompare(); Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed }); }
   };
 
   if (direction === 'toLive') {
@@ -1726,7 +1739,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
       itemsDone: 0, itemsTotal: subtree.reduce((n, f) => n + (f.itemCount || 0), 0),
       done: 0, skipped: 0, failed: 0, currentFolder: '', stopped: false
     };
-    const syncProg = () => Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed });
+    const syncProg = () => { touchCompare(); Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed }); };
     for (const f of subtree) {
       if (compareStop) break;
       try {
@@ -1745,7 +1758,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
           ewsFolderIds.set(destLiveId, destEwsId);
         }
         folders++;
-        compareProg.currentFolder = f.name; compareProg.foldersDone = folders;
+        compareProg.currentFolder = f.name; compareProg.foldersDone = folders; touchCompare();
         const destMsgIds = new Set(), destKeys = new Set(), destFuzzy = fuzzyDupes();
         for (const m of await graph.listMessages(dstUpn, destLiveId)) {
           const mid = normMsgId(m.internetMessageId);
@@ -1820,7 +1833,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
       itemsDone: 0, itemsTotal: srcFolders.reduce((n, f) => n + (f.itemCount || 0), 0),
       done: 0, skipped: 0, failed: 0, currentFolder: '', stopped: false
     };
-    const syncProg = () => Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed });
+    const syncProg = () => { touchCompare(); Object.assign(compareProg, { done, skipped, failed, itemsDone: done + skipped + failed }); };
     for (const f of subtree) {
       if (compareStop) break;
       try {
@@ -1830,7 +1843,7 @@ app.post('/api/compare/transfer-folder', compareGuard(async req => {
         destByLiveId.set(f.folderId, dest);
         if (dest.created) foldersCreated.unshift({ scope: dstScope, folderId: dest.folderId, path: dest.path });
         folders++;
-        compareProg.currentFolder = f.name; compareProg.foldersDone = folders;
+        compareProg.currentFolder = f.name; compareProg.foldersDone = folders; touchCompare();
         const dir = engine.folderDir(dstUpn, dstScope, dest.path);
         await fsp.mkdir(dir, { recursive: true });
         const destFolderRow = { folderId: dest.folderId, parentId: parentDest, name: f.name, path: dest.path };
@@ -1928,6 +1941,7 @@ app.post('/api/compare/undo', compareGuard(async req => {
   const noteErr = e => {
     failed++; if (errors.length < 10) errors.push(String(e.message || e).slice(0, 300));
     Object.assign(compareProg, { done: undone, failed, itemsDone: undone + failed + compareProg.foldersDone });
+    touchCompare();
   };
   let restoredLocal = false;
   for (const rec of u.records) {
@@ -1961,6 +1975,7 @@ app.post('/api/compare/undo', compareGuard(async req => {
         if (rec.movedLiveId && rec.srcLiveFolderId) await graph.moveMessage(u.srcUpn, rec.movedLiveId, rec.srcLiveFolderId);
       }
       undone++;
+      touchCompare();
       Object.assign(compareProg, { done: undone, itemsDone: undone + failed + compareProg.foldersDone });
     } catch (e) { noteErr(e); }
   }
@@ -1979,6 +1994,7 @@ app.post('/api/compare/undo', compareGuard(async req => {
       }
       compareProg.foldersDone++;
       compareProg.itemsDone = undone + failed + compareProg.foldersDone;
+      touchCompare();
     } catch (e) { noteErr(e); }
   }
   if (u.direction === 'toLive') { if (restoredLocal) store.recomputeMailboxBytes(u.srcUpn); }

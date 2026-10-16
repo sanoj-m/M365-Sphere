@@ -63,8 +63,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [statFilter, setStatFilter] = useState(null);
-  const [showShared, setShowShared] = useState(false);
-  const [showGuests, setShowGuests] = useState(false);
+  const [showShared, setShowShared] = useState(true);
+  const [showGuests, setShowGuests] = useState(true);
   const [planUpn, setPlanUpn] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [storageOpen, setStorageOpen] = useState(false);
@@ -397,7 +397,7 @@ export default function App() {
             <span>Select a metric to filter the mailbox list</span>
           </div>
           <div className="stats">
-            <StatCard n={a.total} label="Total mailboxes" icon={Mail} kind="all" featured active={!statFilter} onClick={() => setStatFilter(null)} />
+            <StatCard n={a.total} label="Total mailboxes" icon={Mail} kind="all" featured active={!statFilter && showShared && showGuests} onClick={() => { setStatFilter(null); setShowShared(true); setShowGuests(true); }} />
             <StatCard n={licensedCount} label="Licensed" icon={User} active={statFilter === 'user'} onClick={() => toggleFilter('user')} />
             <StatCard n={sharedCount} label="Shared" icon={Users} tone="info" kind="visibility" active={showShared} onClick={() => setShowShared(v => !v)} />
             <StatCard n={guestCount} label="Guests" icon={Globe} tone="warn" kind="visibility" active={showGuests} onClick={() => setShowGuests(v => !v)} />

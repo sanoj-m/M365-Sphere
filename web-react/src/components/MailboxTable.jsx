@@ -141,9 +141,10 @@ export default function MailboxTable({ mailboxes, busy, sizesBusy, scanBusy, pst
     else { setSortKey(k); setSortDir(k.endsWith('Bytes') ? -1 : 1); }
   };
 
-  const filtered = useMemo(() => mailboxes
+  const searchable = useMemo(() => mailboxes
     .filter(m => (m.type !== 'shared' || showShared) && (m.type !== 'guest' || showGuests))
-    .filter(statFilter ? statFilterFns[statFilter] : () => true)
+    .filter(statFilter ? statFilterFns[statFilter] : () => true), [mailboxes, showShared, showGuests, statFilter]);
+  const filtered = useMemo(() => searchable
     .filter(m => !q || m.upn.toLowerCase().includes(q.toLowerCase()))
     .slice()
     .sort((a, b) => {
@@ -154,7 +155,7 @@ export default function MailboxTable({ mailboxes, busy, sizesBusy, scanBusy, pst
             return (typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb))) * sortDir;
           })();
       return c || a.upn.localeCompare(b.upn);
-    }), [mailboxes, showShared, showGuests, statFilter, q, sortKey, sortDir]);
+    }), [searchable, q, sortKey, sortDir]);
   const toggleSel = useCallback(upn => setSel(s => { const n = new Set(s); n.has(upn) ? n.delete(upn) : n.add(upn); return n; }), []);
   const allFilteredSel = filtered.length > 0 && filtered.every(m => sel.has(m.upn));
   const toggleAllFiltered = () => setSel(s => {
@@ -189,7 +190,7 @@ export default function MailboxTable({ mailboxes, busy, sizesBusy, scanBusy, pst
       <div className="toolbar">
         <span className="search-wrap">
           <Search size={14} aria-hidden="true" />
-          <input className="search" aria-label="Search mailboxes" placeholder={`Search ${mailboxes.length} mailboxes…`} value={q} onChange={e => setQ(e.target.value)} />
+          <input className="search" aria-label="Search mailboxes" placeholder={`Search ${searchable.length} mailboxes…`} value={q} onChange={e => setQ(e.target.value)} />
         </span>
         {q && <span className="muted">{filtered.length} match</span>}
         {statFilter && (

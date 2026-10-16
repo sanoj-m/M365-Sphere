@@ -120,5 +120,14 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Compression
 # sha256 sidecar (sha256sum format) — the updater refuses to apply a zip without it.
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 "$hash  M365Sphere-update.zip" | Set-Content -Path "$zip.sha256" -Encoding ascii -NoNewline
+# ed25519 signature — the updater verifies it against the embedded UPDATE_PUBKEY.
+if (Test-Path (Join-Path $root 'installer\release-key.pem')) {
+  node (Join-Path $root 'scripts\sign-release.js') $zip
+  if ($LASTEXITCODE) { Die "sign-release.js failed (exit $LASTEXITCODE)." }
+  $attach = 'zip + .sha256 + .sig'
+} else {
+  Info 'installer\release-key.pem not found — update zip is NOT signed (run: node scripts\sign-release.js installer\M365Sphere-update.zip to generate a key and sign)'
+  $attach = 'zip + .sha256'
+}
 $zsize = [math]::Round((Get-Item $zip).Length / 1MB, 2)
-Info "done: installer\M365Sphere-update.zip ($zsize MB) + .sha256 - attach BOTH to GitHub Release v$pkgVer"
+Info "done: installer\M365Sphere-update.zip ($zsize MB) - attach these to GitHub Release v$pkgVer : $attach"

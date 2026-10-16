@@ -189,8 +189,10 @@ React 18 + Vite SPA. Highlights:
 - **Home dashboard**: primary email-tools navbar above a compact backup workflow;
   notification bell/panel for connection, live-update, auto-resume and app-update
   alerts (including update apply); explicit metric states (`Filter on/off`,
-  `All shown/Show all`, and Shared/Guests list visibility); readable running-job
-  routes, outcome counts and progress instead of raw job JSON.
+  `All shown/Show all`, and Shared/Guests list visibility). All mailbox types
+  are visible by default; Total resets every type/status filter and search
+  counts only searchable rows. Running jobs show readable routes, outcome
+  counts and progress instead of raw job JSON.
 - **Mailbox table**: live search, sortable columns, multi-select actions, status
   chips, type classification (user/shared/guest), per-row Backup/Archive/PST.
 - **Mailbox page** (`/?mailbox=<upn>`): backup explorer (folder tree → item list →
