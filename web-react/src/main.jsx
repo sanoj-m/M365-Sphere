@@ -9,6 +9,7 @@ import CopyEmailPage from './components/CopyEmailPage.jsx';
 import MoveEmailPage from './components/MoveEmailPage.jsx';
 import { LiveProvider } from './live.jsx';
 import { DialogHost } from './dialog.jsx';
+import MasterStopFab from './components/MasterStopFab.jsx';
 import './styles.css';
 
 const params = new URLSearchParams(window.location.search);
@@ -22,6 +23,7 @@ createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
       <DialogHost />
+      <MasterStopFab />
       {moveemail != null ? (
         <MoveEmailPage />
       ) : copyemail != null ? (
