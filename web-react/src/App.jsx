@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Activity, AlertCircle, ArrowRight, CheckCircle2, Clock3, Copy, GitCompare, Globe, HardDrive, Mail, MoveRight, ScanLine, Settings, Square, User, Users } from 'lucide-react';
 import { api, post, del } from './api.js';
 import { cacheGet, cacheSet, cacheClearAll } from './cache.js';
 import { useLive } from './live.jsx';
@@ -16,17 +17,35 @@ import StorageManager from './components/StorageManager.jsx';
 import TasksPanel from './components/TasksPanel.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
 
-function StatCard({ n, label, tone, active, dimmed, stateText, onClick }) {
+function StatCard({ n, label, tone, active, dimmed, stateText, onClick, icon: Icon, featured }) {
   return (
-    <div
-      className={`card stat clickable ${tone || ''}${active ? ' active' : ''}${dimmed ? ' dimmed' : ''}`}
-      role="button"
-      tabIndex={0}
+    <button
+      type="button"
+      className={`card stat ${tone || ''}${active ? ' active' : ''}${dimmed ? ' dimmed' : ''}${featured ? ' featured' : ''}`}
       aria-pressed={active}
       onClick={onClick}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
-    ><span className="n">{n}</span><span className="stat-label">{label}{stateText ? <span className="state">{stateText}</span> : null}</span></div>
+    >
+      <span className="stat-top">
+        <span className="stat-label">{label}</span>
+        {Icon && <span className="stat-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>}
+      </span>
+      <span className="stat-bottom">
+        <span className="n">{n}</span>
+        {stateText ? <span className="state">{stateText}</span> : null}
+      </span>
+    </button>
   );
+}
+
+const jobKindLabels = {
+  backup: 'Mailbox backup', verify: 'Mailbox verification', sizes: 'Exchange size fetch', scan: 'Mailbox count scan',
+  pst: 'PST export', 'move-email': 'Move email', 'copy-email': 'Copy email', 'move-email-undo': 'Undo move email',
+  dedupe: 'Local dedupe', 'dedupe-check': 'Duplicate scan', 'dedupe-live': 'Move duplicates aside', 'exo-export': 'Exchange export',
+};
+
+function parseJobDetail(detail) {
+  if (!detail || typeof detail !== 'string') return detail || null;
+  try { return JSON.parse(detail); } catch { return detail; }
 }
 
 export default function App() {
@@ -212,75 +231,86 @@ export default function App() {
   return (
     <>
       <Reveal index={0}>
-        <header>
+        <header className="dashboard-header">
           <div className="header-top">
             <a className="brand" href="/" title="Go to homepage">
               <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />
-              <h1>M365Sphere</h1>
-            </a>
-            {status && status.configured && (
-              <span className="conn">
-                <span className="dot" />
-                Connected — {status.tenant}
-                {status.archiveGranted ? <span className="archive-flag">· archive granted</span> : ''}
-              </span>
-            )}
-            {live && !live.connected && (
-              <span className="conn conn-warn">
-                <span className="dot" />
-                Live updates paused — reconnecting…
-              </span>
-            )}
-            {status && status.autoResumeSuppressed && (
-              <span className="conn conn-warn" title="A manual Stop was used. Incomplete mailboxes will not auto-resume until you start a backup manually.">
-                <span className="dot" />
-                Auto-resume off — stopped manually
-              </span>
-            )}
-            {status && status.update && status.update.latest && (
-              <button className="conn conn-update" disabled={updating || status.update.status === 'downloading' || status.update.status === 'applying'}
-                title={status.update.latest.notes || 'A new version is available on GitHub'}
-                onClick={applyUpdate}>
-                <span className="dot" />
-                {updating || status.update.status === 'applying' ? 'Updating…'
-                  : status.update.status === 'downloading' ? 'Downloading update…'
-                  : `Update available — v${status.update.latest.version}`}
-              </button>
-            )}
-          </div>
-          <p className="header-sub">Mailbox backup, verification and PST export for Microsoft 365.</p>
-          <div className="actions">
-            <div className="pipeline" role="group" aria-label="Backup workflow steps">
-              <button className={`step${nextStep === 1 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/discover')}>
-                <span className="step-n">1</span><span className="step-label">Discover</span>
-              </button>
-              <button className={`step${nextStep === 2 ? ' suggested' : ''}`} title="Authoritative sizes from Exchange Online, plus the API-accessible archive portion (EWS) for archive mailboxes" disabled={busy || (status && status.sizesRunning)} onClick={() => act('/api/sizes')}>
-                <span className="step-n">2</span><span className="step-label">Fetch Sizes</span>
-              </button>
-              <button className={`step${nextStep === 3 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/verify')}>
-                <span className="step-n">3</span><span className="step-label">Verify All</span>
-              </button>
-              <button className={`step${nextStep === 4 ? ' suggested' : ''}`} disabled={busy || (status && status.pstRunning)} onClick={() => act('/api/pst')}>
-                <span className="step-n">4</span><span className="step-label">Export PST (All)</span>
-              </button>
-              <button className="step" title="Walk every mailbox's folders and re-count the emails on the server (no download) — makes the 'X / Y emails' totals accurate before backing up" disabled={busy || (status && (status.scanRunning || status.running))} onClick={() => startScan()}>
-                <span className="step-n">#</span><span className="step-label">Scan counts</span>
-              </button>
-            </div>
-            <div className="actions-right">
-              <div className="actions-group danger-zone" role="group" aria-label="Stop controls">
-                <button className="btn danger" disabled={!status || !(status.running || status.sizesRunning || status.scanRunning)} onClick={() => act('/api/stop')}>Stop</button>
-                <button className="btn small" disabled={!status || !status.running} title="Stop syncing the primary mailbox only — the archive sync continues" onClick={() => post('/api/stop', { scope: 'primary' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop primary</button>
-                <button className="btn small" disabled={!status || !status.running} title="Stop syncing online archives only — the primary sync continues" onClick={() => post('/api/stop', { scope: 'archive' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop archive</button>
+              <div className="brand-copy">
+                <h1>M365Sphere</h1>
+                <span className="header-sub">Mailbox backup, verification and PST export for Microsoft 365.</span>
               </div>
-              <a className="btn ghost" href="/?compare=" title="Open the side-by-side compare page — local backup on the left, live mailbox on the right, copy/move emails between them">Compare</a>
-              <a className="btn ghost" href="/?dedupe" title="Find and move duplicate emails aside — in the local backup store or the live online mailbox">Dedupe</a>
-              <a className="btn ghost" href="/?copyemail" title="Copy backed-up folders into a live mailbox folder or another local backup — copy-only, duplicates are skipped">Copy email</a>
-              <a className="btn ghost" href="/?moveemail" title="Move backed-up or live folders into a live mailbox folder — source is removed only after the destination copy is verified">Move email</a>
-              <button className="btn ghost" onClick={() => setSettingsOpen(true)}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: 5 }}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h.01a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51h.01a1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v.01a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-                Settings
-              </button>
+            </a>
+            <div className="header-status">
+              {status && status.configured && (
+                <span className="conn">
+                  <span className="dot" />
+                  Connected — {status.tenant}
+                  {status.archiveGranted ? <span className="archive-flag">· archive granted</span> : ''}
+                </span>
+              )}
+              {live && !live.connected && (
+                <span className="conn conn-warn">
+                  <span className="dot" />
+                  Live updates paused — reconnecting…
+                </span>
+              )}
+              {status && status.autoResumeSuppressed && (
+                <span className="conn conn-warn" title="A manual Stop was used. Incomplete mailboxes will not auto-resume until you start a backup manually.">
+                  <span className="dot" />
+                  Auto-resume off — stopped manually
+                </span>
+              )}
+              {status && status.update && status.update.latest && (
+                <button className="conn conn-update" disabled={updating || status.update.status === 'downloading' || status.update.status === 'applying'}
+                  title={status.update.latest.notes || 'A new version is available on GitHub'}
+                  onClick={applyUpdate}>
+                  <span className="dot" />
+                  {updating || status.update.status === 'applying' ? 'Updating…'
+                    : status.update.status === 'downloading' ? 'Downloading update…'
+                    : `Update available — v${status.update.latest.version}`}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="actions">
+            <div className="action-row">
+              <span className="action-label">Backup workflow</span>
+              <div className="pipeline" role="group" aria-label="Backup workflow steps">
+                <button className={`step${nextStep === 1 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/discover')}>
+                  <span className="step-n">1</span><span className="step-label">Discover</span>
+                </button>
+                <button className={`step${nextStep === 2 ? ' suggested' : ''}`} title="Authoritative sizes from Exchange Online, plus the API-accessible archive portion (EWS) for archive mailboxes" disabled={busy || (status && status.sizesRunning)} onClick={() => act('/api/sizes')}>
+                  <span className="step-n">2</span><span className="step-label">Fetch Sizes</span>
+                </button>
+                <button className={`step${nextStep === 3 ? ' suggested' : ''}`} disabled={busy || (status && status.running)} onClick={() => act('/api/verify')}>
+                  <span className="step-n">3</span><span className="step-label">Verify All</span>
+                </button>
+                <button className={`step${nextStep === 4 ? ' suggested' : ''}`} disabled={busy || (status && status.pstRunning)} onClick={() => act('/api/pst')}>
+                  <span className="step-n">4</span><span className="step-label">Export PST (All)</span>
+                </button>
+              </div>
+            </div>
+            <div className="action-row action-row-tools">
+              <span className="action-label">Email tools</span>
+              <div className="tool-actions">
+                <button className="btn ghost" title="Walk every mailbox's folders and re-count the emails on the server (no download) — makes the 'X / Y emails' totals accurate before backing up" disabled={busy || (status && (status.scanRunning || status.running))} onClick={() => startScan()}>
+                  <ScanLine size={15} aria-hidden="true" />Scan counts
+                </button>
+                <a className="btn ghost" href="/?compare=" title="Open the side-by-side compare page — local backup on the left, live mailbox on the right, copy/move emails between them"><GitCompare size={15} aria-hidden="true" />Compare</a>
+                <a className="btn ghost" href="/?dedupe" title="Find and move duplicate emails aside — in the local backup store or the live online mailbox"><Copy size={15} aria-hidden="true" />Dedupe</a>
+                <a className="btn ghost" href="/?copyemail" title="Copy backed-up folders into a live mailbox folder or another local backup — copy-only, duplicates are skipped"><Copy size={15} aria-hidden="true" />Copy email</a>
+                <a className="btn ghost" href="/?moveemail" title="Move backed-up or live folders into a live mailbox folder — source is removed only after the destination copy is verified"><MoveRight size={15} aria-hidden="true" />Move email</a>
+              </div>
+              <div className="action-tail">
+                {status && (status.running || status.sizesRunning || status.scanRunning) && (
+                  <div className="actions-group danger-zone" role="group" aria-label="Stop controls">
+                    <button className="btn danger" disabled={busy} onClick={() => act('/api/stop')}><Square size={11} fill="currentColor" aria-hidden="true" />Stop</button>
+                    {status.running && <button className="btn small" disabled={busy} title="Stop syncing the primary mailbox only — the archive sync continues" onClick={() => post('/api/stop', { scope: 'primary' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop primary</button>}
+                    {status.running && <button className="btn small" disabled={busy} title="Stop syncing online archives only — the primary sync continues" onClick={() => post('/api/stop', { scope: 'archive' }).catch(e => pushLog({ ts: new Date().toISOString(), level: 'error', mailbox: '', message: e.message }))}>Stop archive</button>}
+                  </div>
+                )}
+                <button className="btn ghost settings-btn" onClick={() => setSettingsOpen(true)}><Settings size={15} aria-hidden="true" />Settings</button>
+              </div>
             </div>
           </div>
           {status && status.exoSignIn && (
@@ -294,47 +324,90 @@ export default function App() {
       </Reveal>
 
       <Reveal index={1}>
-        <section className="stats">
-          <StatCard n={a.total} label="Mailboxes" active={!statFilter} onClick={() => setStatFilter(null)} />
-          <StatCard n={licensedCount} label="Licensed" active={statFilter === 'user'} onClick={() => toggleFilter('user')} />
-          <StatCard n={sharedCount} label="Shared" tone="info" active={showShared} dimmed={!showShared} stateText={showShared ? 'shown' : 'hidden'} onClick={() => setShowShared(v => !v)} />
-          <StatCard n={guestCount} label="Guests" tone="warn" active={showGuests} dimmed={!showGuests} stateText={showGuests ? 'shown' : 'hidden'} onClick={() => setShowGuests(v => !v)} />
-          <StatCard n={a.done} label="Fully backed up" tone="ok" active={statFilter === 'done'} onClick={() => toggleFilter('done')} />
-          <StatCard n={a.partial} label="Partial (pending)" tone="warn" active={statFilter === 'partial'} onClick={() => toggleFilter('partial')} />
-          <StatCard n={a.errors} label="Errors" tone="bad" active={statFilter === 'error'} onClick={() => toggleFilter('error')} />
-          <StatCard n={fmtBytes(a.primaryBytes + a.archiveBytes)} label="Backed up (primary + archive)" active={statFilter === 'bytes'} onClick={() => toggleFilter('bytes')} />
+        <section className="stats-section" aria-labelledby="mailbox-overview-title">
+          <div className="section-heading">
+            <h2 id="mailbox-overview-title">Mailbox overview</h2>
+            <span>Select a metric to filter the mailbox list</span>
+          </div>
+          <div className="stats">
+            <StatCard n={a.total} label="Total mailboxes" icon={Mail} featured active={!statFilter} onClick={() => setStatFilter(null)} />
+            <StatCard n={licensedCount} label="Licensed" icon={User} active={statFilter === 'user'} onClick={() => toggleFilter('user')} />
+            <StatCard n={sharedCount} label="Shared" icon={Users} tone="info" active={showShared} dimmed={!showShared} stateText={showShared ? 'shown' : 'hidden'} onClick={() => setShowShared(v => !v)} />
+            <StatCard n={guestCount} label="Guests" icon={Globe} tone="warn" active={showGuests} dimmed={!showGuests} stateText={showGuests ? 'shown' : 'hidden'} onClick={() => setShowGuests(v => !v)} />
+            <StatCard n={a.done} label="Fully backed up" icon={CheckCircle2} tone="ok" active={statFilter === 'done'} onClick={() => toggleFilter('done')} />
+            <StatCard n={a.partial} label="Partial (pending)" icon={Clock3} tone="warn" active={statFilter === 'partial'} onClick={() => toggleFilter('partial')} />
+            <StatCard n={a.errors} label="Errors" icon={AlertCircle} tone={a.errors ? 'bad' : 'ok'} active={statFilter === 'error'} onClick={() => toggleFilter('error')} />
+            <StatCard n={fmtBytes(a.primaryBytes + a.archiveBytes)} label="Backed up" icon={HardDrive} featured stateText="Primary + archive" active={statFilter === 'bytes'} onClick={() => toggleFilter('bytes')} />
+          </div>
         </section>
       </Reveal>
 
       {jobs.length > 0 && (
         <Reveal index={2}>
-          <div>
+          <div className="job-stack">
             {jobs.map(job => {
-              const pct = job.total ? Math.round(100 * job.done / job.total) : 0;
+              const total = Number(job.total) || 0;
+              const done = Number(job.done) || 0;
+              const pct = total ? Math.min(100, Math.max(0, Math.round(100 * done / total))) : 0;
+              const data = parseJobDetail(job.detail);
+              const structured = data && typeof data === 'object';
+              const source = structured ? data.srcUpn : '';
+              const destination = structured ? (data.dstUpn || (data.target === 'local' ? 'Local backup' : '')) : '';
+              const plainDetail = !structured && typeof data === 'string' ? data : '';
+              const hasOutcomes = structured && ['done', 'skipped', 'failed'].some(key => data[key] != null);
+              const doneLabel = job.kind === 'move-email' ? 'moved' : job.kind === 'copy-email' ? 'copied' : 'processed';
+              const kindLabel = jobKindLabels[job.kind] || job.kind.replace(/-/g, ' ');
+              const taskHref = job.kind === 'move-email' ? '/?moveemail' : job.kind === 'copy-email' ? '/?copyemail' : null;
               return (
                 <section className="jobbar card" key={job.id}>
-                  <div className="joblabel">
-                    <span className="kind">{job.kind} — running</span>
-                    <span>{job.done}/{job.total}{job.total ? ` (${pct}%)` : ''} {job.detail || ''}</span>
+                  <span className="job-symbol" aria-hidden="true"><Activity size={19} strokeWidth={1.8} /></span>
+                  <div className="job-main">
+                    <div className="job-heading">
+                      <span className="kind">{kindLabel}</span>
+                      <span className="job-status"><span className="job-status-dot" />Running</span>
+                    </div>
+                    {(source || destination) ? (
+                      <div className="job-route">
+                        {source && <span>{source}</span>}
+                        {source && destination && <ArrowRight size={14} aria-hidden="true" />}
+                        {destination && <span>{destination}</span>}
+                      </div>
+                    ) : plainDetail ? <div className="job-description" title={plainDetail}>{plainDetail}</div> : null}
+                    <div className="job-meta">
+                      <span className="job-count">{done.toLocaleString()}{total ? ` of ${total.toLocaleString()}` : ''} items</span>
+                      {hasOutcomes && (
+                        <span className="job-outcomes">
+                          <span>{Number(data.done) || 0} {doneLabel}</span>
+                          <span>{Number(data.skipped) || 0} skipped</span>
+                          <span className={Number(data.failed) ? 'has-failures' : ''}>{Number(data.failed) || 0} failed</span>
+                        </span>
+                      )}
+                    </div>
+                    <div className={`bar${total ? '' : ' indet'}`} role="progressbar" aria-label={`${kindLabel} progress`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={total ? pct : undefined} aria-valuetext={total ? `${pct}% complete` : 'In progress'}>
+                      <div className="fill" style={total ? { width: pct + '%' } : undefined} />
+                    </div>
                   </div>
-                  <div className="bar"><div className="fill" style={{ width: pct + '%' }} /></div>
-                  {job.kind === 'backup' && (
-                    <button className="btn small primary jobbar-open" onClick={() => {
-                      const jobUpns = status && Array.isArray(status.jobUpns) ? status.jobUpns : [];
-                      const syncing = mailboxes.filter(m => m.status === 'syncing').map(m => m.upn);
-                      const liveUpns = status && status.live ? Object.keys(status.live) : [];
-                      const upns = jobUpns.length
-                        ? jobUpns
-                        : [...new Set([...liveUpns, ...syncing, ...(job.detail ? [job.detail] : [])])];
-                      if (upns.length === 1) {
-                        window.location.href = '/?mailbox=' + encodeURIComponent(upns[0]);
-                      } else if (upns.length) {
-                        openBackupView(upns);
-                      } else {
-                        pushLog({ ts: new Date().toISOString(), level: 'warn', mailbox: '', message: 'Open live view: no active mailbox detected yet — the backup may be between mailboxes, try again in a few seconds.' });
-                      }
-                    }}>Open live view{status && status.jobUpns && status.jobUpns.length > 1 ? ` (${status.jobUpns.length} mailboxes)` : ''} →</button>
-                  )}
+                  <div className="job-side">
+                    <span className="job-percent">{total ? `${pct}%` : 'Active'}</span>
+                    {job.kind === 'backup' && (
+                      <button className="btn small primary jobbar-open" onClick={() => {
+                        const jobUpns = status && Array.isArray(status.jobUpns) ? status.jobUpns : [];
+                        const syncing = mailboxes.filter(m => m.status === 'syncing').map(m => m.upn);
+                        const liveUpns = status && status.live ? Object.keys(status.live) : [];
+                        const upns = jobUpns.length
+                          ? jobUpns
+                          : [...new Set([...liveUpns, ...syncing, ...(job.detail ? [job.detail] : [])])];
+                        if (upns.length === 1) {
+                          window.location.href = '/?mailbox=' + encodeURIComponent(upns[0]);
+                        } else if (upns.length) {
+                          openBackupView(upns);
+                        } else {
+                          pushLog({ ts: new Date().toISOString(), level: 'warn', mailbox: '', message: 'Open live view: no active mailbox detected yet — the backup may be between mailboxes, try again in a few seconds.' });
+                        }
+                      }}>Open live view{status && status.jobUpns && status.jobUpns.length > 1 ? ` (${status.jobUpns.length} mailboxes)` : ''}<ArrowRight size={13} aria-hidden="true" /></button>
+                    )}
+                    {taskHref && <a className="btn small ghost jobbar-open" href={taskHref}>View task<ArrowRight size={13} aria-hidden="true" /></a>}
+                  </div>
                 </section>
               );
             })}
