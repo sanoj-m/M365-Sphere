@@ -7,3 +7,12 @@ pst-import/
 daemon/
 tools/
 scripts/*.out
+# build artifacts + local tenant-specific tooling (never public)
+installer/stage/
+installer/*.exe
+installer/*.zip
+docs/user1-archive-folders.txt
+scripts/compare-archive-11projects.js
+scripts/fix-kvbids-root-folders.js
+scripts/move-pc2-projects.js
+scripts/move-pc2-sweep.js

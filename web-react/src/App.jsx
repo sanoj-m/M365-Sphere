@@ -3,6 +3,7 @@ import { api, post, del } from './api.js';
 import { cacheGet, cacheSet, cacheClearAll } from './cache.js';
 import { useLive } from './live.jsx';
 import { useModal } from './components/useModal.js';
+import { dialog } from './dialog.jsx';
 import { fmtBytes, fmtTime } from './format.js';
 import Reveal from './components/Reveal.jsx';
 import SetupPanel from './components/SetupPanel.jsx';
@@ -45,6 +46,19 @@ export default function App() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [logTab, setLogTab] = useState('activity');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const applyUpdate = async () => {
+    const u = status && status.update;
+    if (!u || !u.latest || updating) return;
+    if (!await dialog.confirm({ title: 'Update M365Sphere', okText: 'Update now', message: `Update from v${u.current} to v${u.latest.version}?${u.latest.notes ? `\n\n${u.latest.notes}` : ''}\n\nThe app restarts itself; backups and config are kept.` })) return;
+    setUpdating(true);
+    try { await post('/api/update/apply'); } catch { /* socket drops when the server exits mid-reply — expected */ }
+    // The server downloads, swaps files and restarts. Reload once it is back.
+    const t0 = Date.now();
+    const poll = () => api('/api/status').then(() => window.location.reload())
+      .catch(() => (Date.now() - t0 < 120000 ? setTimeout(poll, 3000) : setUpdating(false)));
+    setTimeout(poll, 5000);
+  };
   const [theme, setTheme] = useState(() => cacheGet('theme', 'dark'));
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -222,6 +236,16 @@ export default function App() {
                 <span className="dot" />
                 Auto-resume off — stopped manually
               </span>
+            )}
+            {status && status.update && status.update.latest && (
+              <button className="conn conn-update" disabled={updating || status.update.status === 'downloading' || status.update.status === 'applying'}
+                title={status.update.latest.notes || 'A new version is available on GitHub'}
+                onClick={applyUpdate}>
+                <span className="dot" />
+                {updating || status.update.status === 'applying' ? 'Updating…'
+                  : status.update.status === 'downloading' ? 'Downloading update…'
+                  : `Update available — v${status.update.latest.version}`}
+              </button>
             )}
           </div>
           <p className="header-sub">Mailbox backup, verification and PST export for Microsoft 365.</p>

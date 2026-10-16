@@ -270,7 +270,51 @@ or accessibility. No new files, wrappers, or abstractions the task doesn't need.
 
 ## Current state / recent changes (refresh each session)
 
-_Updated 2026-10-09. Keep to ~10 lines; delete entries older than ~2 weeks._
+_Updated 2026-10-15. Keep to ~10 lines; delete entries older than ~2 weeks._
+
+- NSIS installer (`installer/`): `build-installer.ps1` builds web-react, stages a
+  data/secret-free app tree, compiles `m365-sphere.nsi` → `M365Sphere-Setup.exe`,
+  and zips the stage → `M365Sphere-update.zip` (GitHub Release asset for
+  auto-updates). User-level install to `%LOCALAPPDATA%\M365-Sphere`, Node.js via
+  winget if missing, `npm install --omit=dev --ignore-scripts` at install time
+  (better-sqlite3 N-API prebuilt, no compiler). Seamless first run: `server.js`
+  no longer exits when config.json is missing — it copies the template and
+  starts unconfigured, and the dashboard auto-shows the SetupPanel wizard
+  (`status.configured` false), which provisions the Entra app via one
+  device-code sign-in. The old `first-run-setup.ps1` Read-Host flow was removed;
+  `Start-M365-Sphere.bat` just starts the server + opens the browser.
+- Bulk live→live mailbox migration tooling (2026-10-16):
+  `scripts/exo-folder-sizes.js <upn> [pathPrefix]` (per-folder
+  FolderAndSubfolderSize via EXO), `scripts/move-pc2-projects.js` (driver:
+  per-project move-email engine runs via the server API, then deletes the
+  verified-empty source tree; multi-pass because Graph `listMessages` is
+  EVENTUALLY CONSISTENT after bulk PST imports — freshly imported items can be
+  invisible to listings for weeks, so a "done" move can leave items behind;
+  re-list and re-move until the subtree reads empty), and
+  `scripts/move-pc2-sweep.js` (handles engine fuzzy-only skips: fingerprint-
+  verifies both MIMEs, retires true dupes, uploads + retires genuinely UNIQUE
+  look-alikes — most fuzzy skips were unique content, never force-retire them).
+  `scripts/fix-kvbids-root-folders.js` repairs live→live moves that flattened
+  the source structure onto the destination root (moves created folders under
+  the proper parent via `/mailFolders/{id}/move`, merges where a same-project
+  folder already exists). MoveEmailPage auto-selects the running source
+  mailbox when none is picked (runs started via API are then visible).
+- Auto-updater (`lib/updater.js`, enabled via `updateRepo` + `updateCheck` in
+  config.json — the public repo must exist with Releases): checks
+  `api.github.com/repos/<repo>/releases/latest` 20 s after startup + daily,
+  compares semver against package.json `version`; state exposed as
+  `status.update` + `GET /api/update/status`, `POST /api/update/check|apply`.
+  Apply downloads the release zip to `data/update/`, verifies it contains
+  server.js/package.json/lib, then spawns `scripts/update-apply.bat` detached
+  and exits with code 42 (launchers treat 42 as "updater will relaunch" and
+  break their restart loop). The bat waits for server exit, `robocopy /MIR`
+  stages over the app dir EXCLUDING data/node_modules/pst-export/pst-import/
+  tools/.git + config.json/Uninstall.exe/*.log, runs npm install if
+  package-lock changed, relaunches `Start-M365-Sphere.bat`, logs to
+  `data/update-apply.log`. UI: header chip ("Update available — vX") with
+  confirm → apply → poll-until-reload (App.jsx), Settings → "Check for
+  updates". Release flow: bump package.json version → build-installer.ps1 →
+  GitHub Release tagged `v<ver>` with `M365Sphere-update.zip` attached.
 
 - "Move email" page (`web-react/src/components/MoveEmailPage.jsx` at
   `/?moveemail`, nav link in App.jsx): clone of the Copy email page with MOVE
@@ -315,7 +359,7 @@ _Updated 2026-10-09. Keep to ~10 lines; delete entries older than ~2 weeks._
   `move-email-undo`; plan cleared only on a zero-failure undo.
   `scripts/undo-move-email.js <jobId> [--apply]` — one-off reconstruction undo
   for jobs WITHOUT a plan (job 1575 undone with it: 1824/1824 restored to
-  karsten.v, 24 dst copies moved to archive.admin Deleted Items, 0 failed).
+  user1, 24 dst copies moved to the admin mailbox's Deleted Items, 0 failed).
 
 - "Copy email" page (`web-react/src/components/CopyEmailPage.jsx` at
   `/?copyemail`, nav link in App.jsx; DedupePage-style per-mailbox sessions):

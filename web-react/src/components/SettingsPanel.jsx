@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { api, post } from '../api.js';
 import { getTimePrefs, setTimePrefs } from '../format.js';
 
 const TIMEZONES = ['Asia/Dubai', 'Asia/Riyadh', 'Asia/Qatar', 'Asia/Kuwait', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Chicago', 'America/Los_Angeles', 'Asia/Kolkata', 'Asia/Singapore', 'Australia/Sydney', 'UTC'];
@@ -8,6 +9,20 @@ const TIMEZONES = ['Asia/Dubai', 'Asia/Riyadh', 'Asia/Qatar', 'Asia/Kuwait', 'Eu
 export default function SettingsPanel({ theme, onTheme, onOpenSetup, onOpenStorage, onDeleteAll, onClose }) {
   const tp = getTimePrefs();
   const apply = p => { setTimePrefs(p); window.location.reload(); };
+  const [updMsg, setUpdMsg] = useState(null);
+  const [updBusy, setUpdBusy] = useState(false);
+  const checkUpdates = async () => {
+    setUpdBusy(true); setUpdMsg(null);
+    try {
+      const s = await post('/api/update/check');
+      setUpdMsg(!s.enabled ? 'Updates are not configured on this install.'
+        : s.latest ? `Update available: v${s.latest.version} — use the chip in the header to apply it.`
+        : s.status === 'error' ? `Check failed: ${s.error}`
+        : `You're on the latest version (v${s.current}).`);
+    } catch (e) { setUpdMsg('Check failed: ' + e.message); }
+    setUpdBusy(false);
+    api('/api/status').catch(() => {}); // nudge header chip refresh on next poll
+  };
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-card settings-card" role="dialog" aria-modal="true" aria-label="Settings" onClick={e => e.stopPropagation()}>
@@ -89,6 +104,17 @@ export default function SettingsPanel({ theme, onTheme, onOpenSetup, onOpenStora
               <p className="settings-hint">Inspect, browse or delete downloaded mailbox backups and PST exports.</p>
             </div>
             <button className="btn ghost" onClick={onOpenStorage}>Manage stored data</button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h4>App updates</h4>
+          <div className="settings-row">
+            <div>
+              <div className="settings-label">Check for updates</div>
+              <p className="settings-hint">Checks the public GitHub releases for a newer version. The app also checks automatically once a day.{updMsg ? ` ${updMsg}` : ''}</p>
+            </div>
+            <button className="btn ghost" disabled={updBusy} onClick={checkUpdates}>{updBusy ? 'Checking…' : 'Check now'}</button>
           </div>
         </section>
 

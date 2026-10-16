@@ -3,6 +3,7 @@ cd /d "%~dp0"
 set restarts=0
 :restart
 node server.js
+if %errorlevel%==42 exit /b 0
 rem A clean exit resets the backoff counter; only consecutive crashes count.
 if %errorlevel%==0 set restarts=0
 set /a restarts+=1

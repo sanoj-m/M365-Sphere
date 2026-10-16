@@ -1,6 +1,6 @@
 {
   "name": "m365-sphere",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Local Microsoft 365 mailbox backup (primary + online archive) with verification and PST export",
   "main": "server.js",
   "scripts": {

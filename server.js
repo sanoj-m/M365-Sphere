@@ -12,6 +12,7 @@ const { Store } = require('./lib/store');
 const { Engine, parseMimeHeaders } = require('./lib/engine');
 const { PstExporter } = require('./lib/pst');
 const { Setup } = require('./lib/setup');
+const { Updater } = require('./lib/updater');
 const { Exo } = require('./lib/exo');
 const { ExoExport } = require('./lib/exoexport');
 const { PstIngest } = require('./lib/pstingest');
@@ -38,8 +39,7 @@ if (!fs.existsSync(CONFIG_PATH)) {
     process.exit(1);
   }
   fs.copyFileSync(template, CONFIG_PATH);
-  console.log('Created config.json from template -> EDIT IT, then restart.');
-  process.exit(1);
+  console.log('Created config.json from template — starting unconfigured; finish setup in the dashboard.');
 }
 const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 cfg.dataDir = path.resolve(__dirname, cfg.dataDir || './data');
@@ -85,6 +85,7 @@ const graphie = cfg.graphExchangeExportEnabled ? new GraphIe(cfg, auth, log) : n
 const engine = new Engine({ cfg, store, graph, ews, graphie, log, bus });
 const pst = new PstExporter({ cfg, store, log, bus });
 const setup = new Setup({ cfg, log, configPath: CONFIG_PATH });
+const updater = new Updater({ cfg, log, appRoot: __dirname });
 const exo = new Exo({ cfg, log, bus, auth });
 const exoExport = new ExoExport({ cfg, store, log, bus, auth, ingest: new PstIngest({ cfg, store, log, bus }) });
 const copyEngine = new CopyEngine({ cfg, store, graph, ews, log, bus });
@@ -188,6 +189,7 @@ app.get('/api/status', wrap(async () => ({
   exoSignIn,
   autoResumeSuppressed,
   configured: cfg.clientId && !cfg.clientId.startsWith('your-'),
+  update: updater.state,
   tenant: cfg.tenantName || cfg.tenantId,
   archiveGranted: !!cfg.archiveGranted,
   scopes: cfg.scopes,
@@ -2108,6 +2110,16 @@ app.post('/api/setup/login', wrap(() => setup.startDeviceLogin()));
 app.get('/api/setup/status', wrap(() => setup.status()));
 app.post('/api/setup/archive', wrap(() => setup.grantArchive()));
 app.post('/api/setup/disconnect', wrap(() => setup.disconnect()));
+// Self-update from public GitHub Releases (enabled when updateRepo is set).
+app.get('/api/update/status', wrap(() => updater.state));
+app.post('/api/update/check', wrap(() => updater.check()));
+app.post('/api/update/apply', wrap(async () => {
+  if (updater.state.status === 'available') await updater.download();
+  if (updater.state.status !== 'ready') throw new Error(updater.state.error || 'no update ready — check first');
+  const version = updater.state.latest.version;
+  setTimeout(() => { try { updater.apply(); } catch (e) { log('error', '', '[update] apply failed: ' + (e.message || e)); } }, 300).unref();
+  return { applying: true, version };
+}));
 app.get('/api/logs', wrap(req => store.logTail(parseInt(req.query.n || '200', 10))));
 app.delete('/api/logs', wrap(() => {
   const removed = store.clearAllEvents();
@@ -2222,6 +2234,11 @@ if (cfg.autoResume !== false) {
   setTimeout(() => resumeIncomplete('startup', true), 5000);
   const sweepMin = cfg.autoResumeMinutes || 15;
   setInterval(() => resumeIncomplete('retry sweep', false), sweepMin * 60 * 1000).unref();
+}
+// Update check: once shortly after startup, then daily. Disabled without updateRepo.
+if (cfg.updateRepo && cfg.updateCheck !== false) {
+  setTimeout(() => updater.check().catch(() => { }), 20000);
+  setInterval(() => updater.check().catch(() => { }), 24 * 60 * 60 * 1000).unref();
 }
 // Copy-email queue survives restarts — start the oldest queued copy (the
 // engine no-ops when a run is already active).

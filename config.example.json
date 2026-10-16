@@ -20,6 +20,8 @@
   "graveyardDeleted": false,
   "diskReserveBytes": 10737418240,
   "graphExchangeExportEnabled": false,
+  "updateRepo": "sanoj-m/M365-Sphere",
+  "updateCheck": true,
   "pstTimeoutMs": 600000,
   "pstRetryCount": 2,
   "pstWindow": { "from": "00:00", "to": "00:00" },

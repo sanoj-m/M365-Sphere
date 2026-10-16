@@ -735,6 +735,8 @@ export default function MoveEmailPage() {
       api('/api/status').then(s => {
         setRuns(s.moveEmailRuns || []);
         setJobs(s.jobs || []);
+        // Nothing picked yet but a move is running (e.g. started via API) — jump to its source mailbox.
+        if (s.moveEmailRuns && s.moveEmailRuns.length) setUpn(v => v || s.moveEmailRuns[0].upn);
         t = setTimeout(poll, s.moveEmailRunning ? 2000 : 10000);
       }).catch(() => { t = setTimeout(poll, 5000); });
     };

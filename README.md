@@ -71,6 +71,15 @@ export, and repair treat every item identically regardless of which API delivere
 
 ## 🚀 Quick start
 
+**End users (installer):** run `installer\M365Sphere-Setup.exe` — it installs
+Node.js if needed, installs all dependencies, and opens the dashboard. Rebuild
+it with `powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1`.
+Installed instances auto-update from the public GitHub repo's Releases (header
+chip when a new version is published; daily + manual checks; backups, config
+and PSTs are never touched by an update).
+
+**From source:**
+
 ```powershell
 npm install                 # backend dependencies
 cd web-react; npm install; npm run build; cd ..   # dashboard build
@@ -191,21 +200,26 @@ React 18 + Vite SPA. Highlights:
 - **Dedupe page** (`/?dedupe`): multiple concurrent per-mailbox sessions (column
   grid), local (SHA-256 + fuzzy) and live (Message-ID candidates verified by
   mailparser content fingerprint — identity headers + whitespace-stripped
-  html/text + decoded attachment hashes) dedupe. Verified live duplicates move
-  immediately per group to `Deleted Items/Dedupe <date>/<original path>`;
-  Deleted Items/Junk subtrees are excluded so runs resume after a stop. Live
-  apply is its own job kind (`dedupe-live`) with a persisted per-item plan
-  (`dedupe_live_plan` table) — the History "Resume" button on an
-  interrupted/stopped run moves leftover verified items without re-scanning or
-  re-verifying already-processed ones.
-  Per-mailbox run history (Restart failed/stopped, Verify again), live check
-  progress (incl. excluded-folder count), persistent log tail, restore for
-  local runs.
-- **Copy email** (`/?copyemail`): bulk-copy backed-up folders (primary +
-  archive, cascading tree) into any live mailbox folder or another local
-  backup — folder structure recreated with merge-by-name, destination
-  duplicates skipped (Message-ID / subject+date / fuzzy / sha256), per-item
-  retries, resumable, live progress tasks panel.
+  html/text + decoded attachment hashes) dedupe. The live CHECK itself
+  content-verifies every candidate and seeds the per-item move plan
+  (`dedupe_live_plan` table) — the report shows exactly what will move, and
+  "Move duplicates aside" reuses that verification (no re-downloading).
+  A **↻ Refresh** button re-scans the whole mailbox (reports show folders/
+  messages scanned). Verified live duplicates move to
+  `Deleted Items/Dedupe <date>/<original path>`; Deleted Items/Junk subtrees
+  are excluded so runs resume after a stop. Live apply is its own job kind
+  (`dedupe-live`) — the History "Resume" button on an interrupted/stopped run
+  moves leftover verified items without re-scanning or re-verifying.
+- **Copy email** (`/?copyemail`): copy emails from the local backup (primary +
+  archive) OR a live mailbox to any mailbox's live folder or local backup.
+  Whole folders (cascade-down tree with subfolders-only action) or individually
+  picked emails (per-folder picker column, flat copy). Folder structure
+  recreated with merge-by-name, destination duplicates skipped (Message-ID /
+  subject+date / fuzzy / sha256), per-item retries + "Retry failed", DB-backed
+  job queue (one run at a time, queued jobs auto-start, survive restarts),
+  floating tasks panel with from↓to folder deep-links and GB progress.
+  Live uploads go via EWS with original dates (never drafts); FTS (Graph-IE)
+  items are MIME-reconstructed on the fly.
 - **Move email** (`/?moveemail`): same as Copy email but move semantics with a
   no-loss rule — the destination copy is verified before the source is removed
   (live sources → Deleted Items, local primary → graveyard, local archive is
@@ -252,6 +266,10 @@ PST & EXO export
 
 Copy / move / dedupe / compare
   POST /api/copy · GET /api/copy/:jobId     copy/move to another mailbox
+  POST /api/copy-email {srcUpn,dstUpn?,target,srcMode?,folderKeys[]|items[],dst}
+          · POST /api/copy-email/retry {jobId} · GET /api/copy-email/jobs?upn=
+          · GET /api/copy-email/queue · DELETE /api/copy-email/queue/:id
+          · POST /api/stop/copy-email — copy page backend (queue + retry + live source)
   POST /api/dedupe/check|apply|restore      local + live dedupe
   GET  /api/live/:upn/folders|items|item|download|attachment   read-only live mailbox
   POST /api/compare/transfer[/transfer-folder]  copy/move between store and live
@@ -280,8 +298,9 @@ server.js            entry: API, SSE, job orchestration, serves React build
 lib/                 engine · graph · ews · graphie · exo · exoexport · store ·
                      auth · coverage · fts · preview · pst · pstingest · copy ·
                      dedupe · util · setup
-scripts/             repair/audit/grant/probe tooling (pst-repair, dedupe-items,
-                     backfill-fts-meta, repair-folder-ews, grant-*.ps1, …)
+scripts/             repair/audit/grant/probe tooling (pst-repair, pst-verify,
+                     cleanup-pst-folders, fix-live-dates, merge-live-folders,
+                     backfill-fts-meta, repair-folder-ews, grant-*.ps1, watchdog.ps1, …)
 ps/                  Export-MailboxToPst.ps1 (Outlook COM writer)
 web-react/           React 18 + Vite dashboard source
 web/                 minimal fallback UI (if web-react isn't built)
@@ -300,6 +319,11 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='no
 ```
 
 Interrupting anything is safe; the auto-resume sweep re-queues incomplete work.
+
+**Keep-alive watchdog**: Scheduled Task `M365Sphere-Watchdog` (AtLogon) runs
+`scripts/watchdog.ps1`, which restarts `server.js` within 30 s if the process
+is gone (log: `data/watchdog.log`). Deliberate stop: create
+`data/watchdog.pause`; remove: `Unregister-ScheduledTask -TaskName 'M365Sphere-Watchdog'`.
 
 **For the 1 TB mailbox**: first full pass takes days (tenant throttling) — normal.
 `powercfg /change standby-timeout-ac 0`, re-run Backup next day, then Verify, then
@@ -323,7 +347,8 @@ File). Folder hierarchy preserved; no restore agent needed.
 
 ## 👨‍💻 Development
 
-- Repo: <https://github.com/sanoj-m/M365-Sphere> (private, `main`). `config.json`,
+- Repo: <https://github.com/sanoj-m/M365-Sphere> (**public**, `main` — every push is
+  world-visible; no tenant identifiers in committed files). `config.json`,
   `data/`, `node_modules/`, `pst-import/` gitignored.
 - Session logs in `docs/sessions/`; the `saver` skill (`.kimi-code/skills/saver/`)
   writes the session log, refreshes docs, and commits when ≥50 files changed.
