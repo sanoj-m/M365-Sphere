@@ -538,12 +538,14 @@ export default function ComparePage({ upn }) {
 
   return (
     <div className="mailbox-page compare-page">
-      <header className="mailbox-page-head">
-        <a className="brand" href="/" title="Go to homepage">
-          <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />
-          <h1>M365Sphere</h1>
-        </a>
-        <h2>Compare &amp; transfer</h2>
+      <ToolPageHeader active="compare" title="Compare & transfer" actions={<>
+        <button className="btn small" title="Running copies (live, with stop) and the transfer history — a task becomes a history row when it finishes" onClick={() => { setHistoryOpen(true); setHistoryRows(null); api('/api/compare/history').then(d => setHistoryRows(d.rows)).catch(e => setErr(e.message)); }}>
+          Tasks{runningCopies > 0 ? ` (${runningCopies})` : ''}
+        </button>
+        <button className="btn small" disabled={busy || !undoInfo} title={undoInfo ? `Undo last action: ${undoInfo.label}` : 'Nothing to undo'} onClick={doUndo}>↩ Undo</button>
+        <button className="btn small" title="Clear both mailbox selections (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
+        <a className="btn small" href={upn ? `/?mailbox=${encodeURIComponent(upn)}` : '/'}>← Back</a>
+      </>}>
         <label className="muted">Local backup
           <MailboxPicker value={leftUpn} onChange={v => { setLeftUpn(v); setLeftFolder(null); }}
             mailboxes={mailboxes} showShared={showShared} showGuests={showGuests}
@@ -557,14 +559,7 @@ export default function ComparePage({ upn }) {
           <label><input type="checkbox" checked={showShared} onChange={e => setShowShared(e.target.checked)} /> shared</label>
           <label><input type="checkbox" checked={showGuests} onChange={e => setShowGuests(e.target.checked)} /> guests</label>
         </span>
-        <span className="spacer" />
-        <button className="btn small" title="Running copies (live, with stop) and the transfer history — a task becomes a history row when it finishes" onClick={() => { setHistoryOpen(true); setHistoryRows(null); api('/api/compare/history').then(d => setHistoryRows(d.rows)).catch(e => setErr(e.message)); }}>
-          Tasks{runningCopies > 0 ? ` (${runningCopies})` : ''}
-        </button>
-        <button className="btn small" disabled={busy || !undoInfo} title={undoInfo ? `Undo last action: ${undoInfo.label}` : 'Nothing to undo'} onClick={doUndo}>↩ Undo</button>
-        <button className="btn small" title="Clear both mailbox selections (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
-        <a className="btn small" href={upn ? `/?mailbox=${encodeURIComponent(upn)}` : '/'}>← Back</a>
-      </header>
+      </ToolPageHeader>
       {err && <p className="bad-text">{err}</p>}
       {result && <p className="good-text">{result}</p>}
       {busy && (() => {

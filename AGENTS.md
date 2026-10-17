@@ -278,11 +278,11 @@ _Updated 2026-10-16. Keep to ~10 lines; delete entries older than ~2 weeks._
 - Full audit 2026-10-16 (plan `docs/audit-plan.md`, report
   `docs/audit-2026-10-16.md`) — all fixes landed, activate on next restart:
   updater now REQUIRES a `<zip>.sha256` release sidecar (build-installer.ps1
-  emits it; old releases fail update checks by design) and, once a real key is
-  pasted into `UPDATE_PUBKEY` in lib/updater.js, an ed25519 `<zip>.sig`
-  signature (scripts/sign-release.js signs with installer/release-key.pem,
-  gitignored; REPLACE_ME placeholder skips sig check with a warn so
-  self-hosters aren't broken); update-apply.bat is
+  emits it; old releases fail update checks by design) AND an ed25519
+  `<zip>.sig` signature (a real pubkey is embedded as UPDATE_PUBKEY in
+  lib/updater.js; scripts/sign-release.js signs with
+  installer/release-key.pem — gitignored, BACK IT UP; the REPLACE_ME
+  placeholder skips the sig check with a warn for self-hosters); update-apply.bat is
   an allow-list mirror that always relaunches; watchdog rewritten
   (stdout/stderr → data/server-out|err.log, API 3-strike healthcheck) and
   re-registered via `scripts/register-watchdog.ps1` (ExecutionTimeLimit 0 —
@@ -312,7 +312,10 @@ _Updated 2026-10-16. Keep to ~10 lines; delete entries older than ~2 weeks._
   default, Total resets type + status filters, and search counts searchable rows.
   Running jobs render parsed routes and outcome counts instead of raw JSON.
   Responsive dark/light layouts verified at 1600/390/375 px; mobile navbar
-  leaves clearance for MasterStopFab.
+  leaves clearance for MasterStopFab. `components/ToolPageHeader.jsx` shares
+  the two-row brand/email-tools nav + contextual toolbar across Compare,
+  Dedupe, Copy email and Move email (active nav, responsive controls);
+  MailboxPage keeps its legacy header.
 - NSIS installer (`installer/`): `build-installer.ps1` builds web-react, stages a
   data/secret-free app tree, compiles `m365-sphere.nsi` → `M365Sphere-Setup.exe`,
   and zips the stage → `M365Sphere-update.zip` (GitHub Release asset for

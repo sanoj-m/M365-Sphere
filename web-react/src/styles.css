@@ -1231,6 +1231,51 @@ tr.row-missing td { background: rgba(239, 68, 68, 0.05); }
 }
 .mailbox-page-head h2 { margin: 0; font-size: 16px; word-break: break-all; }
 .mailbox-page-head .spacer { flex: 1 1 auto; }
+
+/* Shared tool-page header: dashboard navigation + contextual toolbar */
+.main-nav .nav-action.active,
+.main-nav .nav-action.active:hover:not(:disabled) {
+  color: var(--color-success);
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+.main-nav .nav-action.active svg { color: var(--color-success); }
+.mailbox-page-head.tool-page-head { display: block; flex: none; }
+.tool-page-head .navbar { width: 100%; padding-right: 40px; }
+.tool-page-controls { min-width: 0; flex-wrap: wrap; }
+.tool-page-head .tool-page-title {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  word-break: normal;
+}
+.tool-page-filters {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.tool-page-filters > label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.mailbox-page-head.tool-page-head .tool-page-filters > label .mbx-picker { margin-left: 0; }
+.tool-page-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 768px) {
+  .tool-page-head .tool-page-title { flex-basis: 100%; }
+  .tool-page-filters { flex-basis: 100%; width: 100%; }
+  .tool-page-filters > label { flex: 1 1 280px; }
+  .mailbox-page-head.tool-page-head .tool-page-filters > label .mbx-picker { flex: 1 1 180px; }
+  .tool-page-filters .mbx-picker .search { width: 100%; }
+  .tool-page-actions { justify-content: flex-start; }
+}
+@media (max-width: 480px) {
+  .tool-page-filters > label { flex-basis: 100%; }
+  .tool-page-filters .compare-type-toggles { flex-wrap: wrap; }
+}
+
 .mailbox-panels { display: flex; flex-direction: column; gap: var(--space-xl); }
 .mailcard-scopes { display: flex; flex-direction: column; gap: var(--space-lg); margin-top: var(--space-md); }
 

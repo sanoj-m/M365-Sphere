@@ -761,12 +761,10 @@ export default function MoveEmailPage() {
 
   return (
     <div className="mailbox-page copyemail-page">
-      <header className="mailbox-page-head">
-        <a className="brand" href="/" title="Go to homepage">
-          <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />
-          <h1>M365Sphere</h1>
-        </a>
-        <h2>Move email</h2>
+      <ToolPageHeader active="moveemail" title="Move email" actions={<>
+        <button className="btn small" title="Clear the mailbox choice and all saved selections/destinations (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
+        <a className="btn small" href="/">← Back</a>
+      </>}>
         <label className="muted">Source mailbox
           <MailboxPicker value={upn} onChange={setUpn}
             mailboxes={mailboxes} showShared={showShared} showGuests={showGuests}
@@ -776,10 +774,7 @@ export default function MoveEmailPage() {
           <label><input type="checkbox" checked={showShared} onChange={e => setShowShared(e.target.checked)} /> shared</label>
           <label><input type="checkbox" checked={showGuests} onChange={e => setShowGuests(e.target.checked)} /> guests</label>
         </span>
-        <span className="spacer" />
-        <button className="btn small" title="Clear the mailbox choice and all saved selections/destinations (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
-        <a className="btn small" href="/">← Back</a>
-      </header>
+      </ToolPageHeader>
       {err && <p className="bad-text">{err}</p>}
 
       {!upn ? (

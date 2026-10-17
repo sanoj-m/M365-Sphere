@@ -343,12 +343,10 @@ export default function DedupePage() {
 
   return (
     <div className="mailbox-page dedupe-page">
-      <header className="mailbox-page-head">
-        <a className="brand" href="/" title="Go to homepage">
-          <img className="brand-icon" src="/logo.png" alt="M365Sphere logo" />
-          <h1>M365Sphere</h1>
-        </a>
-        <h2>Dedupe</h2>
+      <ToolPageHeader active="dedupe" title="Dedupe" actions={<>
+        <button className="btn small" title="Remove all sessions and saved check results (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
+        <a className="btn small" href="/">← Back</a>
+      </>}>
         <label className="muted">Mailbox
           <MailboxPicker value={pickerUpn} onChange={setPickerUpn}
             mailboxes={mailboxes} showShared={showShared} showGuests={showGuests}
@@ -361,10 +359,7 @@ export default function DedupePage() {
           <label><input type="checkbox" checked={showShared} onChange={e => setShowShared(e.target.checked)} /> shared</label>
           <label><input type="checkbox" checked={showGuests} onChange={e => setShowGuests(e.target.checked)} /> guests</label>
         </span>
-        <span className="spacer" />
-        <button className="btn small" title="Remove all sessions and saved check results (they are remembered across refreshes otherwise)" onClick={resetAll}>Reset</button>
-        <a className="btn small" href="/">← Back</a>
-      </header>
+      </ToolPageHeader>
       {err && <p className="bad-text">{err}</p>}
 
       {sessions.length === 0 ? (
