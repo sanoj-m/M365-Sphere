@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Activity, AlertCircle, ArrowRight, Bell, Check, CheckCircle2, Clock3, Copy, Download, Eye, EyeOff, Filter, GitCompare, Globe, HardDrive, Mail, MoveRight, ScanLine, Settings, Square, User, Users, X } from 'lucide-react';
+import { Activity, AlertCircle, ArrowRight, Bell, Check, CheckCircle2, Clock3, Download, Eye, EyeOff, Filter, Globe, HardDrive, Mail, ScanLine, Settings, Square, User, Users, X } from 'lucide-react';
+import { EmailToolsNav } from './components/ToolPageHeader.jsx';
 import { api, post, del } from './api.js';
 import { cacheGet, cacheSet, cacheClearAll } from './cache.js';
 import { useLive } from './live.jsx';
@@ -268,15 +269,11 @@ export default function App() {
                 <span className="header-sub">Mailbox backup, verification and PST export for Microsoft 365.</span>
               </div>
             </a>
-            <nav className="main-nav" aria-label="Email tools">
+            <EmailToolsNav>
               <button type="button" className="nav-action" title="Walk every mailbox's folders and re-count the emails on the server (no download) — makes the 'X / Y emails' totals accurate before backing up" disabled={busy || (status && (status.scanRunning || status.running))} onClick={() => startScan()}>
                 <ScanLine size={16} aria-hidden="true" /><span>Scan counts</span>
               </button>
-              <a className="nav-action" href="/?compare=" title="Open the side-by-side compare page — local backup on the left, live mailbox on the right, copy/move emails between them"><GitCompare size={16} aria-hidden="true" /><span>Compare</span></a>
-              <a className="nav-action" href="/?dedupe" title="Find and move duplicate emails aside — in the local backup store or the live online mailbox"><Copy size={16} aria-hidden="true" /><span>Dedupe</span></a>
-              <a className="nav-action" href="/?copyemail" title="Copy backed-up folders into a live mailbox folder or another local backup — copy-only, duplicates are skipped"><Copy size={16} aria-hidden="true" /><span>Copy email</span></a>
-              <a className="nav-action" href="/?moveemail" title="Move backed-up or live folders into a live mailbox folder — source is removed only after the destination copy is verified"><MoveRight size={16} aria-hidden="true" /><span>Move email</span></a>
-            </nav>
+            </EmailToolsNav>
             <div className="navbar-actions">
               {status && status.configured && (
                 <span className="connection-status" title={`Connected — ${status.tenant}${status.archiveGranted ? ' · archive granted' : ''}`}>

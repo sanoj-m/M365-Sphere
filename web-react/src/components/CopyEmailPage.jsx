@@ -3,6 +3,7 @@ import { api, post, del } from '../api.js';
 import { fmtBytes, fmtTime, fmtDate, fmtDateTime } from '../format.js';
 import { MailboxPicker } from './ComparePage.jsx';
 import { CopyScopeTree } from './CopyWizard.jsx';
+import ToolPageHeader from './ToolPageHeader.jsx';
 import { ChevronRight, FolderOpen, FolderClosed } from 'lucide-react';
 
 // Single-select folder tree for the destination picker (live or local rows).

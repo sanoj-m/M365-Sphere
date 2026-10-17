@@ -3,6 +3,7 @@ import { api, post } from '../api.js';
 import { fmtBytes, fmtTime, fmtDateTime } from '../format.js';
 import { MailboxPicker } from './ComparePage.jsx';
 import { CopyScopeTree } from './CopyWizard.jsx';
+import ToolPageHeader from './ToolPageHeader.jsx';
 import { ChevronRight, FolderOpen, FolderClosed } from 'lucide-react';
 
 // Move email — mirrors CopyEmailPage but with MOVE semantics: the destination

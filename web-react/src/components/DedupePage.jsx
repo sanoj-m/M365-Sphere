@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { api, post } from '../api.js';
 import { fmtBytes, fmtTime } from '../format.js';
 import { MailboxPicker } from './ComparePage.jsx';
+import ToolPageHeader from './ToolPageHeader.jsx';
 
 // One dedupe session card per mailbox. Check/apply/restore run independently
 // per mailbox — the backend allows one dedupe job per upn concurrently.

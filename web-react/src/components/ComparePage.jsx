@@ -4,6 +4,7 @@ import { api, post, withToken } from '../api.js';
 import { fmtBytes, fmtDateTime } from '../format.js';
 import { ScopeTree, qs } from './browse.jsx';
 import { dialog } from '../dialog.jsx';
+import ToolPageHeader from './ToolPageHeader.jsx';
 
 const elapsed = iso => {
   if (!iso) return '';

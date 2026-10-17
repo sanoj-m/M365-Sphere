@@ -124,7 +124,6 @@ header {
   width: 42px;
   height: 42px;
   border-radius: 11px;
-  background: #fff;
   padding: 3px;
   object-fit: contain;
   box-shadow: 0 0 16px rgba(34, 197, 94, 0.22);
@@ -1749,6 +1748,8 @@ tr.row-missing td { background: rgba(239, 68, 68, 0.05); }
 [data-theme='light'] body { color-scheme: light; }
 [data-theme='light'] header h1 { text-shadow: none; }
 [data-theme='light'] .brand-icon { box-shadow: 0 0 0 1px var(--color-border); }
+/* Logo ships black (light theme) and white variants; dark theme inverts the glyph. */
+[data-theme='dark'] .brand-icon { filter: invert(1); box-shadow: none; }
 [data-theme='light'] .logs.log-sidebar {
   background: #FFFFFF;
   box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
